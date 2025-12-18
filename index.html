@@ -246,7 +246,6 @@
                         let totalBytes = 0;
                         let count = 0;
 
-                        // Parallelize metadata fetching for speed
                         const metadataPromises = listResult.items.map(itemRef => getMetadata(itemRef));
                         const metaResults = await Promise.all(metadataPromises);
 
@@ -344,6 +343,7 @@
             const handleLogoUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                setLogo(file); // Store local file object
                 setLogoUrl(URL.createObjectURL(file)); // Local immediate preview
                 if (user && syncStatus !== 'offline') {
                     setSyncStatus('syncing');
@@ -351,7 +351,7 @@
                         const ref = ref(storage, `users/${user.uid}/assets/logo-${Date.now()}`);
                         await uploadBytes(ref, file);
                         const url = await getDownloadURL(ref);
-                        setLogoUrl(url);
+                        setLogoUrl(url); // Update to remote URL for persistence
                         setSyncStatus('synced');
                     } catch(e) {}
                 }
@@ -407,7 +407,7 @@
                 setFiles(prev => prev.map(f => f.id === id ? { ...f, isPlaceholder: false } : f));
             };
             const removeFile = (id) => setFiles(files.filter(f => f.id !== id));
-            const removeLogo = () => { setLogoUrl(null); if (logoInputRef.current) logoInputRef.current.value = ""; };
+            const removeLogo = () => { setLogoUrl(null); setLogo(null); if (logoInputRef.current) logoInputRef.current.value = ""; };
             const updateFileField = (id, field, value) => setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
             const updateMeta = (field, value) => setProjectMeta(prev => ({ ...prev, [field]: value }));
             const updatePlaceholderPages = (id, val) => {
@@ -479,13 +479,40 @@
 
                     const parsedScale = parseFloat(logoScale) || 1.0;
 
+                    // --- LOGO EMBEDDING STRATEGY ---
                     let embeddedLogo = null;
-                    if (logoUrl) {
-                        try {
+                    try {
+                        let logoBytes = null;
+                        let isPng = false;
+
+                        // Priority 1: Local File Object (Fastest, avoids CORS)
+                        if (logo) {
+                            logoBytes = await logo.arrayBuffer();
+                            isPng = logo.type === 'image/png' || logo.name.toLowerCase().endsWith('.png');
+                        } 
+                        // Priority 2: Remote URL (Fallback for restored sessions)
+                        else if (logoUrl) {
                             const res = await fetch(logoUrl);
-                            const logoBytes = await res.arrayBuffer();
-                            try { embeddedLogo = await mergedPdf.embedPng(logoBytes); } catch { embeddedLogo = await mergedPdf.embedJpg(logoBytes); }
-                        } catch(e) { console.error("Logo fetch failed", e); }
+                            if (!res.ok) throw new Error("Fetch failed");
+                            logoBytes = await res.arrayBuffer();
+                            isPng = logoUrl.toLowerCase().includes('.png') || logoUrl.startsWith('data:image/png');
+                        }
+
+                        if (logoBytes) {
+                            // Try primary format, fallback to secondary if user uploaded mismatched extension
+                            try {
+                                embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes);
+                            } catch (e1) {
+                                try {
+                                    embeddedLogo = isPng ? await mergedPdf.embedJpg(logoBytes) : await mergedPdf.embedPng(logoBytes);
+                                } catch(e2) {
+                                    console.error("Failed to embed logo image format", e2);
+                                    alert("Warning: Logo could not be embedded. Please check if the file is a valid JPG or PNG.");
+                                }
+                            }
+                        }
+                    } catch(e) { 
+                        console.error("Logo fetch/embed failed", e); 
                     }
 
                     const coverPage = mergedPdf.addPage();
@@ -568,7 +595,7 @@
                                     if (!res.ok) throw new Error("Fetch failed: " + res.statusText);
                                     fileBytes = await res.arrayBuffer();
                                 }
-
+                                
                                 if (fileBytes) {
                                     const srcDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
                                     const copied = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
