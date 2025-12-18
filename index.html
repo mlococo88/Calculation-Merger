@@ -211,7 +211,7 @@
                                             });
                                         });
                                     }
-                                    if (data.logoUrl) setLogoUrl(data.logoUrl); // Load base64 string from cloud
+                                    if (data.logoUrl) setLogoUrl(data.logoUrl);
                                     if (data.logoScale !== undefined) setLogoScale(data.logoScale.toString());
                                     if (data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
                                     setSyncStatus('synced');
@@ -573,9 +573,10 @@
                                 const p = mergedPdf.addPage();
                                 drawWrappedText(p, `PLACEHOLDER FOR SECTION ${f.sectionLabel}`, p.getHeight()/2, 18, fontBold, rgb, [0.7,0.7,0.7]);
                             }
-                        } else if (f.downloadURL || f.fileObj) {
+                        } else {
+                            // PRIORITY: Try Local File Object First
                             try {
-                                let fileBytes;
+                                let fileBytes = null;
                                 if (f.fileObj) {
                                     fileBytes = await f.fileObj.arrayBuffer();
                                 } else if (f.downloadURL) {
@@ -583,15 +584,20 @@
                                     if (!res.ok) throw new Error("Fetch failed: " + res.statusText);
                                     fileBytes = await res.arrayBuffer();
                                 }
-                                
+
                                 if (fileBytes) {
                                     const srcDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
                                     const copied = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
                                     copied.forEach(p => mergedPdf.addPage(p));
+                                } else {
+                                    throw new Error("No data found");
                                 }
                             } catch (e) {
+                                console.error(`Failed to load ${f.name}`, e);
                                 const errP = mergedPdf.addPage();
-                                errP.drawText(`Error loading: ${f.name}`, { x: 50, y: 700 });
+                                errP.drawText(`Error loading file: ${f.name}`, { x: 50, y: 700 });
+                                errP.drawText(`Details: ${e.message}`, { x: 50, y: 680, size: 10, color: rgb(1,0,0) });
+                                errP.drawText(`Hint: If this is an older file, try 'Replace' to re-upload.`, { x: 50, y: 660, size: 10 });
                             }
                         }
                     }
