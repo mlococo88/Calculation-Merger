@@ -26,7 +26,7 @@
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
-            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff
+            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS ---
@@ -35,27 +35,117 @@
         import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
         import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
 
-        // --- FIREBASE CONFIGURATION ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyCCHdYcUCjaGFh1JAGOmjCpaiN1nMsoZqo",
-            authDomain: "to-do-list-8a4ec.firebaseapp.com",
-            projectId: "to-do-list-8a4ec",
-            storageBucket: "to-do-list-8a4ec.firebasestorage.app",
-            messagingSenderId: "455159953730",
-            appId: "1:455159953730:web:4e5063eeff16d6502ff0db",
-            measurementId: "G-3H225D7WWZ"
-        };
+        // --- FIREBASE INIT LOGIC ---
+        // 1. Try to load config from LocalStorage
+        const savedConfig = localStorage.getItem('calcBinder_firebaseConfig');
+        let firebaseConfig = null;
+        let isConfigured = false;
 
-        // Initialize Firebase
-        let app, auth, db, storage;
-        try {
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
-            storage = getStorage(app);
-        } catch (e) {
-            console.error("Firebase Init Error:", e);
+        if (savedConfig) {
+            try {
+                firebaseConfig = JSON.parse(savedConfig);
+                // Basic validation
+                if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+                    isConfigured = true;
+                }
+            } catch (e) {
+                console.error("Invalid saved config", e);
+            }
         }
+
+        // 2. Initialize Firebase Global Vars
+        let app, auth, db, storage;
+
+        if (isConfigured) {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                storage = getStorage(app);
+            } catch (e) {
+                console.error("Firebase Init Error:", e);
+                isConfigured = false; // Fallback to setup screen if init fails
+            }
+        }
+
+        // --- COMPONENTS ---
+
+        const SetupScreen = ({ onSave }) => {
+            const [configInput, setConfigInput] = useState('');
+            const [error, setError] = useState('');
+
+            const handleSave = () => {
+                try {
+                    // Try to parse the input (it might be the JS object or JSON)
+                    // If user pastes "const firebaseConfig = { ... };", clean it up
+                    let cleanInput = configInput.trim();
+                    if (cleanInput.startsWith('const firebaseConfig =')) {
+                        cleanInput = cleanInput.replace('const firebaseConfig =', '').replace(/;$/, '');
+                    }
+                    // Relaxed JSON parsing (handling unquoted keys if user pastes JS object)
+                    // For security/simplicity in this context, we'll ask for JSON or valid Object literal string
+                    // But standard JSON.parse is safest. Let's assume they copy the JSON object.
+                    
+                    // Simple hack to allow unquoted keys from typical JS config copy-paste:
+                    // (Note: This is a loose parser for convenience)
+                    const jsonStr = cleanInput.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2": ').replace(/'/g, '"'); 
+                    
+                    const config = JSON.parse(jsonStr);
+                    
+                    if (!config.apiKey || !config.projectId) {
+                        throw new Error("Missing apiKey or projectId");
+                    }
+
+                    localStorage.setItem('calcBinder_firebaseConfig', JSON.stringify(config));
+                    onSave();
+                } catch (e) {
+                    setError("Invalid Configuration Format. Please paste the JSON object from Firebase Console.");
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+                    <div className="bg-white max-w-md w-full p-8 rounded-xl shadow-lg border border-slate-200">
+                        <div className="flex justify-center mb-6">
+                            <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center">
+                                <Lock className="w-8 h-8 text-blue-600" />
+                            </div>
+                        </div>
+                        <h1 className="text-2xl font-bold text-center text-slate-900 mb-2">Project Setup</h1>
+                        <p className="text-center text-slate-500 mb-6 text-sm">
+                            This application uses Firebase for cloud storage. To begin, please paste your Firebase configuration object below.
+                        </p>
+                        
+                        <div className="bg-slate-50 p-4 rounded border border-slate-200 mb-4">
+                            <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Firebase Configuration JSON</label>
+                            <textarea 
+                                className="w-full h-32 bg-white border border-slate-300 rounded p-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder='{ "apiKey": "...", "authDomain": "...", ... }'
+                                value={configInput}
+                                onChange={(e) => setConfigInput(e.target.value)}
+                            />
+                        </div>
+
+                        {error && (
+                            <div className="flex items-center gap-2 text-red-600 text-xs mb-4 bg-red-50 p-2 rounded">
+                                <AlertCircle className="w-4 h-4" />
+                                {error}
+                            </div>
+                        )}
+
+                        <button 
+                            onClick={handleSave}
+                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
+                        >
+                            <Key className="w-4 h-4" /> Save Configuration
+                        </button>
+                        <p className="text-center text-xs text-slate-400 mt-4">
+                            Configuration is saved locally in your browser.
+                        </p>
+                    </div>
+                </div>
+            );
+        };
 
         const CalcBinder = () => {
             // --- State ---
@@ -113,19 +203,13 @@
                             const unsubDoc = onSnapshot(docRef, (docSnap) => {
                                 if (docSnap.exists()) {
                                     const data = docSnap.data();
-                                    // Merge cloud data
                                     if (data.projectMeta) setProjectMeta(data.projectMeta);
-                                    
-                                    // Merging files needs care: don't overwrite local fileObjs if they exist
                                     if (data.files) {
                                         setFiles(prevFiles => {
-                                            // Only replace if cloud has data, but keep local fileObjs if we just uploaded them
-                                            // Simplification: Trust cloud for structure, but this might break local fileObj references if strict
-                                            // For this demo: We'll take cloud data. If user is online, they rely on URLs.
+                                            // Prefer cloud data for structure
                                             return data.files;
                                         });
                                     }
-                                    
                                     if (data.logoUrl) setLogoUrl(data.logoUrl);
                                     if (data.logoScale) setLogoScale(data.logoScale);
                                     if (data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
@@ -133,14 +217,12 @@
                                 }
                             }, (error) => {
                                 console.warn("Firestore listen error:", error);
-                                // Don't set offline here, just log
                             });
                             return () => unsubDoc(); 
                         } catch (e) {
                             console.error("Firestore Error", e);
                         }
                     } else {
-                        // Attempt Anonymous Sign In
                         try {
                             await signInAnonymously(auth);
                         } catch (error) {
@@ -155,17 +237,12 @@
             // --- 3. Auto-Save Logic (Cloud or Local) ---
             useEffect(() => {
                 const saveData = async () => {
-                    if (syncStatus === 'offline') {
-                        // LocalStorage Fallback (Metadata Only)
-                        // We cannot save file blobs to LS
-                        return; 
-                    }
+                    if (syncStatus === 'offline') return; 
 
                     if (user && syncStatus !== 'connecting' && syncStatus !== 'error') {
                         setSyncStatus('syncing');
                         try {
                             const docRef = doc(db, "users", user.uid, "projects", "active");
-                            // Clean files before saving (remove fileObj)
                             const cleanFiles = files.map(f => {
                                 const { fileObj, ...rest } = f; 
                                 return rest;
@@ -222,7 +299,6 @@
                     }
 
                     let downloadURL = null;
-                    // Only try upload if we are connected
                     if (user && syncStatus !== 'offline') {
                         try {
                             downloadURL = await uploadFileToFirebase(file);
@@ -235,7 +311,7 @@
                         id: crypto.randomUUID(),
                         name: file.name,
                         downloadURL: downloadURL,
-                        fileObj: !downloadURL ? file : null, // Store local file if cloud unavailable
+                        fileObj: !downloadURL ? file : null, 
                         sectionTitle: file.name.replace('.pdf', '').replace(/_/g, ' '), 
                         sectionSubtitle: '',
                         calcsBy: '',
@@ -256,7 +332,6 @@
                 const file = e.target.files[0];
                 if (!file) return;
                 
-                // Local Preview first
                 const localUrl = URL.createObjectURL(file);
                 setLogoUrl(localUrl);
 
@@ -302,7 +377,7 @@
                         ...f,
                         name: file.name,
                         downloadURL: url,
-                        fileObj: !url ? file : null, // Fallback
+                        fileObj: !url ? file : null,
                         uploadDate: currentDate,
                         size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
                         pageCount: pageCount, 
@@ -373,7 +448,6 @@
                 if (syncStatus !== 'offline') setSyncStatus('synced');
             };
 
-            // Standard state updaters
             const removeFile = (id) => setFiles(files.filter(f => f.id !== id));
             const removeLogo = () => { setLogoUrl(null); if (logoInputRef.current) logoInputRef.current.value = ""; };
             const updateFileField = (id, field, value) => setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
@@ -400,7 +474,6 @@
                 setFiles(prev => prev.map(f => f.id === id ? { ...f, pageCount: count, rawPages: count } : f));
             };
 
-            // --- Derived State ---
             const numberedFiles = useMemo(() => {
                 let main = 0, sub = 0, subSub = 0;
                 return files.map(file => {
@@ -412,7 +485,6 @@
                 });
             }, [files]);
 
-            // --- Helper: Wrapped Text ---
             const drawWrappedText = (page, text, y, size, font, rgb, color = [0,0,0], maxWidth, align = 'center') => {
                 if (!text) return;
                 const { width } = page.getSize();
@@ -438,7 +510,6 @@
                 });
             };
 
-            // --- PDF Generation ---
             const generateBinder = async () => {
                 setIsProcessing(true);
                 try {
@@ -448,13 +519,11 @@
                     const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
                     const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
 
-                    // Fetch and Embed Logo
                     let embeddedLogo = null;
                     if (logoUrl) {
                         try {
                             const res = await fetch(logoUrl);
                             const logoBytes = await res.arrayBuffer();
-                            // Simple heuristic for type, or try/catch both
                             try {
                                 embeddedLogo = await mergedPdf.embedPng(logoBytes);
                             } catch {
@@ -463,7 +532,6 @@
                         } catch(e) { console.error("Logo fetch failed", e); }
                     }
 
-                    // --- Cover Sheet ---
                     const coverPage = mergedPdf.addPage();
                     const { width, height } = coverPage.getSize();
                     if (embeddedLogo) {
@@ -486,7 +554,6 @@
                     drawWrappedText(coverPage, projectMeta.date, height - 640, 14, fontRegular, rgb, [0,0,0], width - 100);
                     if (projectMeta.description) drawWrappedText(coverPage, projectMeta.description, 100, 10, fontOblique, rgb, [0.3,0.3,0.3], width - 150);
 
-                    // --- Pagination Analysis ---
                     const fileAnalysis = [];
                     const entriesPerPage = 25; 
                     const tocPageCount = Math.ceil(numberedFiles.length / entriesPerPage) || 1;
@@ -497,7 +564,6 @@
                         runningPageNumber += 1 + pCount;
                     }
 
-                    // --- TOC ---
                     for (let p = 0; p < tocPageCount; p++) {
                         const tocPage = mergedPdf.addPage();
                         drawWrappedText(tocPage, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
@@ -518,9 +584,7 @@
                         }
                     }
 
-                    // --- Content Merge ---
                     for (const f of numberedFiles) {
-                        // Divider
                         const divPage = mergedPdf.addPage();
                         const centerY = height / 2;
                         let tSize = 18, lSize = 14, color = [0,0,0];
@@ -538,7 +602,6 @@
                         if(f.sectionSubtitle) drawWrappedText(divPage, f.sectionSubtitle, centerY - 40, lSize + 2, fontRegular, rgb, [0.4,0.4,0.4]);
                         drawWrappedText(divPage, `Designed: ${f.calcsBy||'-'}  Checked: ${f.checkedBy||'-'}  Rev: ${f.revision||'-'}  Date: ${f.uploadDate}`, 50, 10, fontRegular, rgb, [0.4,0.4,0.4]);
 
-                        // PDF content
                         if (f.isPlaceholder) {
                             for(let k=0; k < f.rawPages; k++) {
                                 const p = mergedPdf.addPage();
@@ -566,7 +629,6 @@
                         }
                     }
 
-                    // --- Page Numbers ---
                     const totalPages = mergedPdf.getPageCount();
                     for (let i = 1; i < totalPages; i++) {
                         const p = mergedPdf.getPage(i);
@@ -786,7 +848,7 @@
         };
 
         const root = createRoot(document.getElementById('root'));
-        root.render(<CalcBinder />);
+        root.render(isConfigured ? <CalcBinder /> : <SetupScreen onSave={() => window.location.reload()} />);
     </script>
 </body>
 </html>
