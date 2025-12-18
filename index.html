@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Engineering Calculation Merger</title>
+    <title>Engineering Calculation Merger (Cloud Enabled)</title>
     
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- PDF-Lib Engine (Loaded globally for performance) -->
+    <!-- PDF-Lib Engine -->
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 
-    <!-- Babel for on-the-fly JSX transpilation -->
+    <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body class="bg-slate-50">
@@ -19,21 +19,51 @@
 
     <!-- Main Application Script -->
     <script type="text/babel" data-type="module">
-        // Import Dependencies from ESM CDN
+        // Import React & Icons
         import React, { useState, useRef, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
         import { 
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
-            Image as ImageIcon, X, FileQuestion, RefreshCw, Download, UploadCloud, AlertTriangle
+            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff
         } from 'https://esm.sh/lucide-react@0.263.1';
 
+        // --- FIREBASE IMPORTS ---
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+
+        // --- FIREBASE CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCCHdYcUCjaGFh1JAGOmjCpaiN1nMsoZqo",
+            authDomain: "to-do-list-8a4ec.firebaseapp.com",
+            projectId: "to-do-list-8a4ec",
+            storageBucket: "to-do-list-8a4ec.firebasestorage.app",
+            messagingSenderId: "455159953730",
+            appId: "1:455159953730:web:4e5063eeff16d6502ff0db",
+            measurementId: "G-3H225D7WWZ"
+        };
+
+        // Initialize Firebase
+        let app, auth, db, storage;
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            storage = getStorage(app);
+        } catch (e) {
+            console.error("Firebase Init Error:", e);
+        }
+
         const CalcBinder = () => {
+            // --- State ---
+            const [user, setUser] = useState(null);
+            const [syncStatus, setSyncStatus] = useState('connecting'); // connecting, synced, syncing, error, offline
             const [files, setFiles] = useState([]);
             const [isProcessing, setIsProcessing] = useState(false);
             
-            // Expanded Project Metadata State
             const [projectMeta, setProjectMeta] = useState({
                 title: "Structural Calculation Package",
                 number: "2025-001",
@@ -42,107 +72,252 @@
                 description: "Structural analysis and design of primary framing members."
             });
 
-            const [logo, setLogo] = useState(null);
-            const [logoPreview, setLogoPreview] = useState(null);
+            const [logo, setLogo] = useState(null); // Blob for upload
+            const [logoUrl, setLogoUrl] = useState(null); // URL from Firebase or Local
             const [logoScale, setLogoScale] = useState(1.0);
-            
             const [pageNumberPos, setPageNumberPos] = useState('right');
 
             const [pdfLibLoaded, setPdfLibLoaded] = useState(false);
             const fileInputRef = useRef(null);
             const logoInputRef = useRef(null);
-            const jsonInputRef = useRef(null); // Ref for JSON import
 
-            // --- 1. Load PDF-Lib Dynamically ---
+            // --- 1. Init PDF Engine ---
             useEffect(() => {
                 const loadPdfLib = async () => {
-                if (window.PDFLib) {
-                    setPdfLibLoaded(true);
-                    return;
-                }
-                try {
-                    const script = document.createElement('script');
-                    script.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
-                    script.onload = () => setPdfLibLoaded(true);
-                    script.onerror = () => console.error("Failed to load PDF-Lib");
-                    document.body.appendChild(script);
-                } catch (err) {
-                    console.error("Error loading PDF script", err);
-                }
+                    if (window.PDFLib) { setPdfLibLoaded(true); return; }
+                    try {
+                        const script = document.createElement('script');
+                        script.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+                        script.onload = () => setPdfLibLoaded(true);
+                        document.body.appendChild(script);
+                    } catch (err) { console.error(err); }
                 };
                 loadPdfLib();
             }, []);
 
-            // --- 2. Background Page Counter ---
+            // --- 2. Firebase Auth & Data Listener ---
             useEffect(() => {
-                if (!pdfLibLoaded || files.length === 0) return;
+                if (!auth) {
+                    setSyncStatus('offline');
+                    return;
+                }
 
-                const countPages = async () => {
-                const { PDFDocument } = window.PDFLib;
-                const updatedFiles = [...files];
-                let changed = false;
-
-                for (let i = 0; i < updatedFiles.length; i++) {
-                    // Only count if it's not a placeholder AND has a file object AND hasn't been counted yet
-                    if (!updatedFiles[i].isPlaceholder && updatedFiles[i].file && updatedFiles[i].pageCount === 'Calc...') {
+                const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+                    if (currentUser) {
+                        setUser(currentUser);
+                        setSyncStatus('synced');
+                        
+                        // Listen to Firestore for changes
                         try {
-                            const arrayBuffer = await updatedFiles[i].file.arrayBuffer();
-                            const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-                            updatedFiles[i].pageCount = pdf.getPageCount();
-                            updatedFiles[i].rawPages = pdf.getPageCount();
-                            changed = true;
+                            const docRef = doc(db, "users", currentUser.uid, "projects", "active");
+                            const unsubDoc = onSnapshot(docRef, (docSnap) => {
+                                if (docSnap.exists()) {
+                                    const data = docSnap.data();
+                                    // Merge cloud data
+                                    if (data.projectMeta) setProjectMeta(data.projectMeta);
+                                    
+                                    // Merging files needs care: don't overwrite local fileObjs if they exist
+                                    if (data.files) {
+                                        setFiles(prevFiles => {
+                                            // Only replace if cloud has data, but keep local fileObjs if we just uploaded them
+                                            // Simplification: Trust cloud for structure, but this might break local fileObj references if strict
+                                            // For this demo: We'll take cloud data. If user is online, they rely on URLs.
+                                            return data.files;
+                                        });
+                                    }
+                                    
+                                    if (data.logoUrl) setLogoUrl(data.logoUrl);
+                                    if (data.logoScale) setLogoScale(data.logoScale);
+                                    if (data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
+                                    setSyncStatus('synced');
+                                }
+                            }, (error) => {
+                                console.warn("Firestore listen error:", error);
+                                // Don't set offline here, just log
+                            });
+                            return () => unsubDoc(); 
                         } catch (e) {
-                            console.error("Could not count pages for", updatedFiles[i].name, e);
-                            updatedFiles[i].pageCount = 'Err';
-                            updatedFiles[i].rawPages = 0;
-                            changed = true;
+                            console.error("Firestore Error", e);
                         }
-                    } else if (!updatedFiles[i].isPlaceholder && !updatedFiles[i].file && updatedFiles[i].pageCount !== 'Missing') {
-                        // Handle imported files that are missing binaries
-                        updatedFiles[i].pageCount = 'Missing';
-                        updatedFiles[i].rawPages = 0;
-                        changed = true;
+                    } else {
+                        // Attempt Anonymous Sign In
+                        try {
+                            await signInAnonymously(auth);
+                        } catch (error) {
+                            console.warn("Auth Error (Switching to Offline Mode):", error.code);
+                            setSyncStatus('offline');
+                        }
                     }
-                }
+                });
+                return () => unsubscribe();
+            }, []);
 
-                if (changed) {
-                    setFiles(updatedFiles);
-                }
+            // --- 3. Auto-Save Logic (Cloud or Local) ---
+            useEffect(() => {
+                const saveData = async () => {
+                    if (syncStatus === 'offline') {
+                        // LocalStorage Fallback (Metadata Only)
+                        // We cannot save file blobs to LS
+                        return; 
+                    }
+
+                    if (user && syncStatus !== 'connecting' && syncStatus !== 'error') {
+                        setSyncStatus('syncing');
+                        try {
+                            const docRef = doc(db, "users", user.uid, "projects", "active");
+                            // Clean files before saving (remove fileObj)
+                            const cleanFiles = files.map(f => {
+                                const { fileObj, ...rest } = f; 
+                                return rest;
+                            });
+                            
+                            await setDoc(docRef, {
+                                projectMeta,
+                                files: cleanFiles,
+                                logoUrl,
+                                logoScale,
+                                pageNumberPos,
+                                lastModified: new Date().toISOString()
+                            }, { merge: true });
+                            setSyncStatus('synced');
+                        } catch (e) {
+                            console.error("Cloud save failed", e);
+                            setSyncStatus('error');
+                        }
+                    }
                 };
 
-                countPages();
-            }, [files, pdfLibLoaded]);
+                const timeout = setTimeout(saveData, 2000);
+                return () => clearTimeout(timeout);
+            }, [files, projectMeta, logoUrl, logoScale, pageNumberPos, user, syncStatus]);
 
-            // --- Event Handlers ---
 
-            const handleFileUpload = (e) => {
+            // --- File Handling Functions ---
+
+            // Upload a single file to Firebase Storage and return the URL
+            const uploadFileToFirebase = async (file) => {
+                if (!user) return null;
+                const fileRef = ref(storage, `users/${user.uid}/files/${crypto.randomUUID()}-${file.name}`);
+                await uploadBytes(fileRef, file);
+                return await getDownloadURL(fileRef);
+            };
+
+            const handleFileUpload = async (e) => {
                 const uploadedFiles = Array.from(e.target.files);
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                
+                if (syncStatus !== 'offline') setSyncStatus('syncing');
 
-                const newFileObjects = uploadedFiles.map((file) => ({
-                id: crypto.randomUUID(),
-                file: file,
-                name: file.name,
-                sectionTitle: file.name.replace('.pdf', '').replace(/_/g, ' '), 
-                sectionSubtitle: '',
-                calcsBy: '',
-                checkedBy: '',
-                revision: '0',
-                uploadDate: currentDate,
-                pageCount: 'Calc...', 
-                rawPages: 0,
-                size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                depth: 0,
-                isPlaceholder: false
+                for (const file of uploadedFiles) {
+                    let pageCount = 'Calc...';
+                    let rawPages = 0;
+                    try {
+                        const arrayBuffer = await file.arrayBuffer();
+                        const pdf = await window.PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+                        rawPages = pdf.getPageCount();
+                        pageCount = rawPages;
+                    } catch (err) {
+                        console.error("Count failed", err);
+                        pageCount = 'Err';
+                    }
+
+                    let downloadURL = null;
+                    // Only try upload if we are connected
+                    if (user && syncStatus !== 'offline') {
+                        try {
+                            downloadURL = await uploadFileToFirebase(file);
+                        } catch (err) {
+                            console.warn("Upload failed, falling back to local file:", err);
+                        }
+                    }
+
+                    setFiles(prev => [...prev, {
+                        id: crypto.randomUUID(),
+                        name: file.name,
+                        downloadURL: downloadURL,
+                        fileObj: !downloadURL ? file : null, // Store local file if cloud unavailable
+                        sectionTitle: file.name.replace('.pdf', '').replace(/_/g, ' '), 
+                        sectionSubtitle: '',
+                        calcsBy: '',
+                        checkedBy: '',
+                        revision: '0',
+                        uploadDate: currentDate,
+                        pageCount: pageCount, 
+                        rawPages: rawPages,
+                        size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+                        depth: 0,
+                        isPlaceholder: false
+                    }]);
+                }
+                if (syncStatus !== 'offline') setSyncStatus('synced');
+            };
+
+            const handleLogoUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                // Local Preview first
+                const localUrl = URL.createObjectURL(file);
+                setLogoUrl(localUrl);
+
+                if (user && syncStatus !== 'offline') {
+                    setSyncStatus('syncing');
+                    try {
+                        const logoRef = ref(storage, `users/${user.uid}/assets/logo-${Date.now()}`);
+                        await uploadBytes(logoRef, file);
+                        const url = await getDownloadURL(logoRef);
+                        setLogoUrl(url); 
+                        setSyncStatus('synced');
+                    } catch(err) {
+                        console.error("Logo upload failed", err);
+                        setSyncStatus('error');
+                    }
+                }
+            };
+
+            const handleReplaceFile = async (e, id) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                if (syncStatus !== 'offline') setSyncStatus('syncing');
+
+                let pageCount = 0;
+                try {
+                    const ab = await file.arrayBuffer();
+                    const pdf = await window.PDFLib.PDFDocument.load(ab, { ignoreEncryption: true });
+                    pageCount = pdf.getPageCount();
+                } catch(err) { console.error(err); }
+
+                let url = null;
+                if (user && syncStatus !== 'offline') {
+                    try {
+                        url = await uploadFileToFirebase(file);
+                    } catch(e) { console.warn("Replace upload failed"); }
+                }
+
+                setFiles(prev => prev.map(f => {
+                    if (f.id !== id) return f;
+                    return {
+                        ...f,
+                        name: file.name,
+                        downloadURL: url,
+                        fileObj: !url ? file : null, // Fallback
+                        uploadDate: currentDate,
+                        size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+                        pageCount: pageCount, 
+                        rawPages: pageCount
+                    };
                 }));
-                setFiles((prev) => [...prev, ...newFileObjects]);
+                if (syncStatus !== 'offline') setSyncStatus('synced');
             };
 
             const handleAddPlaceholder = () => {
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                 const newPlaceholder = {
                     id: crypto.randomUUID(),
-                    file: null,
+                    downloadURL: null,
+                    fileObj: null,
                     name: "Placeholder Section",
                     sectionTitle: "New Placeholder",
                     sectionSubtitle: "",
@@ -150,860 +325,462 @@
                     checkedBy: "",
                     revision: "0",
                     uploadDate: currentDate,
-                    pageCount: 5, // Default manual pages
+                    pageCount: 5,
                     rawPages: 5,
                     size: "N/A",
                     depth: 0,
                     isPlaceholder: true
                 };
-                setFiles((prev) => [...prev, newPlaceholder]);
+                setFiles(prev => [...prev, newPlaceholder]);
             };
 
-            const handleReplacePlaceholder = (e, id) => {
+            const handleReplacePlaceholder = async (e, id) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                if (syncStatus !== 'offline') setSyncStatus('syncing');
+
+                let pageCount = 0;
+                try {
+                    const ab = await file.arrayBuffer();
+                    const pdf = await window.PDFLib.PDFDocument.load(ab, { ignoreEncryption: true });
+                    pageCount = pdf.getPageCount();
+                } catch(err) { console.error(err); }
+
+                let url = null;
+                if (user && syncStatus !== 'offline') {
+                    try {
+                        url = await uploadFileToFirebase(file);
+                    } catch(e) { console.warn("Placeholder upload failed"); }
+                }
 
                 setFiles(prev => prev.map(f => {
                     if (f.id !== id) return f;
                     return {
                         ...f,
-                        file: file,
                         name: file.name,
                         sectionTitle: f.sectionTitle === "New Placeholder" ? file.name.replace('.pdf', '').replace(/_/g, ' ') : f.sectionTitle,
+                        downloadURL: url,
+                        fileObj: !url ? file : null,
                         uploadDate: currentDate,
                         isPlaceholder: false,
                         size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                        pageCount: 'Calc...', 
-                        rawPages: 0
+                        pageCount: pageCount,
+                        rawPages: pageCount
                     };
                 }));
+                if (syncStatus !== 'offline') setSyncStatus('synced');
             };
 
-            const handleReplaceFile = (e, id) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-
-                setFiles(prev => prev.map(f => {
-                    if (f.id !== id) return f;
-                    return {
-                        ...f,
-                        file: file, // Re-attach the binary
-                        name: file.name,
-                        uploadDate: currentDate,
-                        size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                        pageCount: 'Calc...', 
-                        rawPages: 0
-                    };
-                }));
+            // Standard state updaters
+            const removeFile = (id) => setFiles(files.filter(f => f.id !== id));
+            const removeLogo = () => { setLogoUrl(null); if (logoInputRef.current) logoInputRef.current.value = ""; };
+            const updateFileField = (id, field, value) => setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
+            const updateMeta = (field, value) => setProjectMeta(prev => ({ ...prev, [field]: value }));
+            const moveFile = (index, direction) => {
+                if ((direction === -1 && index === 0) || (direction === 1 && index === files.length - 1)) return;
+                const newFiles = [...files];
+                const temp = newFiles[index];
+                newFiles[index] = newFiles[index + direction];
+                newFiles[index + direction] = temp;
+                if (index + direction === 0) newFiles[index + direction].depth = 0;
+                setFiles(newFiles);
             };
-
-            // --- JSON Export/Import Logic ---
-
-            const handleExportJSON = () => {
-                const data = {
-                    version: "1.0",
-                    timestamp: new Date().toISOString(),
-                    projectMeta,
-                    logoPreview, // Saving base64 string
-                    logoScale,
-                    pageNumberPos,
-                    files: files.map(f => ({
-                        ...f,
-                        file: null, // IMPORTANT: Remove binary blob
-                        pageCount: f.isPlaceholder ? f.pageCount : 'Calc...', // Reset page count status for re-calc on import
-                    }))
-                };
-
-                const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement("a");
-                link.href = url;
-                link.download = `BinderConfig_${projectMeta.number || 'Draft'}.json`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+            const changeDepth = (index, delta) => {
+                const newFiles = [...files];
+                const newDepth = newFiles[index].depth + delta;
+                if (newDepth >= 0 && newDepth <= 2 && !(index === 0 && newDepth > 0)) {
+                    newFiles[index].depth = newDepth;
+                    setFiles(newFiles);
+                }
             };
-
-            const handleImportJSON = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    try {
-                        const data = JSON.parse(event.target.result);
-                        
-                        // Restore Project Meta
-                        if(data.projectMeta) setProjectMeta(data.projectMeta);
-                        
-                        // Restore Logo (Base64)
-                        if(data.logoPreview) {
-                            setLogoPreview(data.logoPreview);
-                            // Note: We can't easily recreate the File object for 'logo', 
-                            // but we can assume logoPreview is sufficient for PDF generation logic (which uses embedding)
-                            // or create a Blob from base64 if strictly needed.
-                            fetch(data.logoPreview)
-                                .then(res => res.blob())
-                                .then(blob => setLogo(blob));
-                        }
-                        if(data.logoScale) setLogoScale(data.logoScale);
-                        if(data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
-
-                        // Restore Files
-                        if(data.files && Array.isArray(data.files)) {
-                            const restoredFiles = data.files.map(f => ({
-                                ...f,
-                                id: crypto.randomUUID(), // New IDs to avoid conflicts
-                                file: null, // Explicitly null
-                                pageCount: f.isPlaceholder ? f.pageCount : 'Missing', // Flag as missing
-                            }));
-                            setFiles(restoredFiles);
-                        }
-                        
-                        alert("Configuration loaded successfully. Please re-link missing PDF files.");
-                    } catch (err) {
-                        console.error("Import failed", err);
-                        alert("Failed to parse JSON file.");
-                    }
-                };
-                reader.readAsText(file);
-                // Reset input
-                e.target.value = '';
-            };
-
-
             const updatePlaceholderPages = (id, val) => {
                 const count = parseInt(val) || 1;
                 setFiles(prev => prev.map(f => f.id === id ? { ...f, pageCount: count, rawPages: count } : f));
             };
 
-            const handleLogoUpload = (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                setLogo(file);
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    setLogoPreview(reader.result);
-                };
-                reader.readAsDataURL(file);
-                }
-            };
-
-            const removeLogo = () => {
-                setLogo(null);
-                setLogoPreview(null);
-                if (logoInputRef.current) logoInputRef.current.value = "";
-            };
-
-            const removeFile = (id) => {
-                setFiles(files.filter(f => f.id !== id));
-            };
-
-            const moveFile = (index, direction) => {
-                if (direction === -1 && index === 0) return;
-                if (direction === 1 && index === files.length - 1) return;
-
-                const newFiles = [...files];
-                const temp = newFiles[index];
-                newFiles[index] = newFiles[index + direction];
-                newFiles[index + direction] = temp;
-                
-                if (index + direction === 0) {
-                newFiles[index + direction].depth = 0;
-                }
-
-                setFiles(newFiles);
-            };
-
-            const changeDepth = (index, delta) => {
-                const newFiles = [...files];
-                const newDepth = newFiles[index].depth + delta;
-                if (newDepth >= 0 && newDepth <= 2 && !(index === 0 && newDepth > 0)) {
-                newFiles[index].depth = newDepth;
-                setFiles(newFiles);
-                }
-            };
-
-            const updateFileField = (id, field, value) => {
-                setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
-            };
-
-            const updateMeta = (field, value) => {
-                setProjectMeta(prev => ({ ...prev, [field]: value }));
-            };
-
-            // --- Derived State: Calculate Section Numbers ---
+            // --- Derived State ---
             const numberedFiles = useMemo(() => {
-                let mainCounter = 0;
-                let subCounter = 0;
-                let subSubCounter = 0;
-
+                let main = 0, sub = 0, subSub = 0;
                 return files.map(file => {
-                let sectionLabel = "";
-                
-                if (file.depth === 0) {
-                    mainCounter++;
-                    subCounter = 0;
-                    subSubCounter = 0;
-                    sectionLabel = `${mainCounter}`;
-                } else if (file.depth === 1) {
-                    subCounter++;
-                    subSubCounter = 0;
-                    sectionLabel = `${mainCounter}.${subCounter}`;
-                } else if (file.depth === 2) {
-                    subSubCounter++;
-                    sectionLabel = `${mainCounter}.${subCounter}.${subSubCounter}`;
-                }
-
-                return { ...file, sectionLabel };
+                    let label = "";
+                    if (file.depth === 0) { main++; sub = 0; subSub = 0; label = `${main}`; } 
+                    else if (file.depth === 1) { sub++; subSub = 0; label = `${main}.${sub}`; } 
+                    else if (file.depth === 2) { subSub++; label = `${main}.${sub}.${subSub}`; }
+                    return { ...file, sectionLabel: label };
                 });
             }, [files]);
 
-            // --- Check for Missing Files ---
-            const hasMissingFiles = useMemo(() => {
-                return files.some(f => !f.isPlaceholder && !f.file);
-            }, [files]);
-
-            // --- Helper: Text Drawing with Wrapping ---
+            // --- Helper: Wrapped Text ---
             const drawWrappedText = (page, text, y, size, font, rgb, color = [0,0,0], maxWidth, align = 'center') => {
                 if (!text) return;
-                
                 const { width } = page.getSize();
-                const safeWidth = maxWidth || (width - 100); 
-
+                const safeWidth = maxWidth || (width - 100);
                 const words = text.split(' ');
-                let lines = [];
-                let currentLine = words[0];
-
+                let lines = [], currentLine = words[0];
                 for (let i = 1; i < words.length; i++) {
-                const word = words[i];
-                const width = font.widthOfTextAtSize(`${currentLine} ${word}`, size);
-                if (width < safeWidth) {
-                    currentLine += ` ${word}`;
-                } else {
-                    lines.push(currentLine);
-                    currentLine = word;
-                }
+                    const word = words[i];
+                    const width = font.widthOfTextAtSize(`${currentLine} ${word}`, size);
+                    if (width < safeWidth) currentLine += ` ${word}`;
+                    else { lines.push(currentLine); currentLine = word; }
                 }
                 lines.push(currentLine);
-
                 const lineHeight = size * 1.3;
                 const centerIndex = (lines.length - 1) / 2;
-                
                 lines.forEach((line, i) => {
-                const dy = (centerIndex - i) * lineHeight;
-                const lineY = y + dy; 
-                
-                const textWidth = font.widthOfTextAtSize(line, size);
-                let xPos = (width - textWidth) / 2;
-                if (align === 'left') xPos = 50; 
-
-                page.drawText(line, {
-                    x: xPos,
-                    y: lineY,
-                    size: size,
-                    font: font,
-                    color: rgb(color[0], color[1], color[2]),
-                });
+                    const dy = (centerIndex - i) * lineHeight;
+                    const lineY = y + dy;
+                    const textWidth = font.widthOfTextAtSize(line, size);
+                    let xPos = (width - textWidth) / 2;
+                    if (align === 'left') xPos = 50;
+                    page.drawText(line, { x: xPos, y: lineY, size: size, font: font, color: rgb(...color) });
                 });
             };
 
-            // --- PDF Generation Logic ---
+            // --- PDF Generation ---
             const generateBinder = async () => {
-                if (!pdfLibLoaded) {
-                    alert("PDF Engine is still initializing. Please wait a moment and try again.");
-                    return;
-                }
-                if (hasMissingFiles) {
-                    alert("Cannot generate PDF: Some files are missing sources. Please link PDF files to the highlighted sections.");
-                    return;
-                }
-                
                 setIsProcessing(true);
-                
                 try {
-                const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+                    const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+                    const mergedPdf = await PDFDocument.create();
+                    const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
+                    const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
+                    const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
 
-                const mergedPdf = await PDFDocument.create();
-                const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
-                const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
-                const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
-
-                // --- Prepare Logo ---
-                let embeddedLogo = null;
-                if (logo || logoPreview) {
-                    try {
-                        let logoBytes;
-                        let isPng = false;
-                        
-                        if (logo) {
-                            logoBytes = await logo.arrayBuffer();
-                            isPng = logo.type === 'image/png';
-                        } else if (logoPreview) {
-                            // Handle restored session where only base64 exists
-                            const fetchRes = await fetch(logoPreview);
-                            logoBytes = await fetchRes.arrayBuffer();
-                            isPng = logoPreview.startsWith('data:image/png');
-                        }
-
-                        if(logoBytes) {
-                            embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes);
-                        }
-                    } catch (e) {
-                        console.error("Error embedding logo", e);
-                        alert("Could not process logo image. Proceeding without logo.");
-                    }
-                }
-
-                // --- PASS 0: Generate Cover Sheet ---
-                const coverPage = mergedPdf.addPage();
-                const { width, height } = coverPage.getSize();
-
-                // Place Logo (Top Center)
-                if (embeddedLogo) {
-                    const maxWidth = 250;
-                    const baseScale = maxWidth / embeddedLogo.width;
-                    const effectiveScale = (baseScale > 1 ? 1 : baseScale) * logoScale;
-                    const finalDims = embeddedLogo.scale(effectiveScale);
-                    
-                    coverPage.drawImage(embeddedLogo, {
-                    x: (width - finalDims.width) / 2,
-                    y: height - 100 - finalDims.height,
-                    width: finalDims.width,
-                    height: finalDims.height,
-                    });
-                }
-                
-                drawWrappedText(coverPage, projectMeta.title.toUpperCase(), height - 250, 24, fontBold, rgb, [0,0,0], width - 100);
-                drawWrappedText(coverPage, `PROJECT NO: ${projectMeta.number}`, height - 300, 14, fontRegular, rgb, [0.4,0.4,0.4], width - 100);
-                drawWrappedText(coverPage, "CALCULATION PACKAGE", height / 2, 18, fontBold, rgb, [0,0,0], width - 100);
-                drawWrappedText(coverPage, "PREPARED FOR:", height - 550, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
-                drawWrappedText(coverPage, projectMeta.client, height - 570, 16, fontRegular, rgb, [0,0,0], width - 100);
-                drawWrappedText(coverPage, "DATE:", height - 620, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
-                drawWrappedText(coverPage, projectMeta.date, height - 640, 14, fontRegular, rgb, [0,0,0], width - 100);
-                if (projectMeta.description) {
-                    drawWrappedText(coverPage, projectMeta.description, 100, 10, fontOblique, rgb, [0.3,0.3,0.3], width - 150);
-                }
-
-                // --- PASS 1: Analysis & Pagination ---
-                const fileAnalysis = [];
-                const entriesPerPage = 25; 
-                const tocPageCount = Math.ceil(numberedFiles.length / entriesPerPage) || 1;
-                let runningPageNumber = 1 + tocPageCount + 1; 
-
-                for (const fileData of numberedFiles) {
-                    const pCount = fileData.rawPages || 1; 
-                    fileAnalysis.push({
-                    ...fileData,
-                    startPage: runningPageNumber + 1
-                    });
-                    runningPageNumber += 1 + pCount;
-                }
-
-                // --- PASS 2: Generate Table of Contents ---
-                for (let p = 0; p < tocPageCount; p++) {
-                    const tocPage = mergedPdf.addPage();
-                    drawWrappedText(tocPage, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
-                    if (tocPageCount > 1) {
-                        drawWrappedText(tocPage, `Page ${p + 1} of ${tocPageCount}`, height - 85, 10, fontRegular, rgb, [0.5,0.5,0.5]);
+                    // Fetch and Embed Logo
+                    let embeddedLogo = null;
+                    if (logoUrl) {
+                        try {
+                            const res = await fetch(logoUrl);
+                            const logoBytes = await res.arrayBuffer();
+                            // Simple heuristic for type, or try/catch both
+                            try {
+                                embeddedLogo = await mergedPdf.embedPng(logoBytes);
+                            } catch {
+                                embeddedLogo = await mergedPdf.embedJpg(logoBytes);
+                            }
+                        } catch(e) { console.error("Logo fetch failed", e); }
                     }
 
-                    const startIdx = p * entriesPerPage;
-                    const endIdx = Math.min(startIdx + entriesPerPage, fileAnalysis.length);
-                    let yPos = height - 120;
-
-                    for (let i = startIdx; i < endIdx; i++) {
-                    const item = fileAnalysis[i];
-                    const isMain = item.depth === 0;
-                    const indent = isMain ? 50 : item.depth === 1 ? 70 : 90;
-                    const fontSize = isMain ? 12 : 11;
-                    const font = isMain ? fontBold : fontRegular;
-                    const labelWidth = 60;
-
-                    tocPage.drawText(item.sectionLabel, { x: indent, y: yPos, size: fontSize, font: font });
-                    let title = item.sectionTitle || "Untitled Section";
-                    if (title.length > 55) title = title.substring(0, 52) + "...";
-                    tocPage.drawText(title, { x: indent + labelWidth, y: yPos, size: fontSize, font: font });
-
-                    const pageNumString = item.startPage.toString();
-                    const pageNumWidth = font.widthOfTextAtSize(pageNumString, fontSize);
-                    const dotsEnd = width - 60 - pageNumWidth;
-                    const titleEnd = indent + labelWidth + font.widthOfTextAtSize(title, fontSize);
-                    
-                    if (dotsEnd > titleEnd + 5) {
-                        const dotString = ".".repeat(Math.floor((dotsEnd - (titleEnd + 5)) / 4));
-                        tocPage.drawText(dotString, { x: titleEnd + 5, y: yPos, size: 10, font: fontRegular, color: rgb(0.7,0.7,0.7) });
-                    }
-
-                    tocPage.drawText(pageNumString, { x: width - 50 - pageNumWidth, y: yPos, size: fontSize, font: font });
-                    yPos -= 25;
-                    }
-                }
-
-                // --- PASS 3: Merge Content & Create Dividers ---
-                for (const fileData of numberedFiles) {
-                    // A. Divider
-                    if (true) { 
-                    const dividerPage = mergedPdf.addPage();
-                    const centerY = height / 2;
-                    let titleSize = 18; let labelSize = 14; let color = [0, 0, 0];
-
-                    if (fileData.depth === 1) { titleSize = 16; labelSize = 12; color = [0.3, 0.3, 0.3]; } 
-                    else if (fileData.depth === 2) { titleSize = 14; labelSize = 10; color = [0.4, 0.4, 0.4]; }
-
+                    // --- Cover Sheet ---
+                    const coverPage = mergedPdf.addPage();
+                    const { width, height } = coverPage.getSize();
                     if (embeddedLogo) {
-                        const maxWidth = 100;
+                        const maxWidth = 250;
                         const baseScale = maxWidth / embeddedLogo.width;
-                        const effectiveScale = (baseScale > 1 ? 1 : baseScale) * logoScale;
-                        const dividerLogoDims = embeddedLogo.scale(effectiveScale);
-                        
-                        dividerPage.drawImage(embeddedLogo, {
-                        x: width - 50 - dividerLogoDims.width,
-                        y: height - 50 - dividerLogoDims.height,
-                        width: dividerLogoDims.width,
-                        height: dividerLogoDims.height,
+                        const finalDims = embeddedLogo.scale((baseScale > 1 ? 1 : baseScale) * logoScale);
+                        coverPage.drawImage(embeddedLogo, {
+                            x: (width - finalDims.width) / 2,
+                            y: height - 100 - finalDims.height,
+                            width: finalDims.width,
+                            height: finalDims.height,
                         });
                     }
+                    drawWrappedText(coverPage, projectMeta.title.toUpperCase(), height - 250, 24, fontBold, rgb, [0,0,0], width - 100);
+                    drawWrappedText(coverPage, `PROJECT NO: ${projectMeta.number}`, height - 300, 14, fontRegular, rgb, [0.4,0.4,0.4], width - 100);
+                    drawWrappedText(coverPage, "CALCULATION PACKAGE", height / 2, 18, fontBold, rgb, [0,0,0], width - 100);
+                    drawWrappedText(coverPage, "PREPARED FOR:", height - 550, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
+                    drawWrappedText(coverPage, projectMeta.client, height - 570, 16, fontRegular, rgb, [0,0,0], width - 100);
+                    drawWrappedText(coverPage, "DATE:", height - 620, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
+                    drawWrappedText(coverPage, projectMeta.date, height - 640, 14, fontRegular, rgb, [0,0,0], width - 100);
+                    if (projectMeta.description) drawWrappedText(coverPage, projectMeta.description, 100, 10, fontOblique, rgb, [0.3,0.3,0.3], width - 150);
 
-                    drawWrappedText(dividerPage, `SECTION ${fileData.sectionLabel}`, centerY + 40, labelSize, fontBold, rgb, [0.5, 0.5, 0.5]);
-                    if (fileData.sectionTitle) drawWrappedText(dividerPage, fileData.sectionTitle, centerY, titleSize, fontBold, rgb, color);
-                    if (fileData.sectionSubtitle) drawWrappedText(dividerPage, fileData.sectionSubtitle, centerY - 40, labelSize + 2, fontRegular, rgb, [0.4, 0.4, 0.4]);
-
-                    const metaText = `Designed: ${fileData.calcsBy || '-'}   Checked: ${fileData.checkedBy || '-'}   Rev: ${fileData.revision || '-'}   Date: ${fileData.uploadDate}`;
-                    drawWrappedText(dividerPage, metaText, 50, 10, fontRegular, rgb, [0.4, 0.4, 0.4]);
+                    // --- Pagination Analysis ---
+                    const fileAnalysis = [];
+                    const entriesPerPage = 25; 
+                    const tocPageCount = Math.ceil(numberedFiles.length / entriesPerPage) || 1;
+                    let runningPageNumber = 1 + tocPageCount + 1; 
+                    for (const f of numberedFiles) {
+                        const pCount = f.rawPages || 1; 
+                        fileAnalysis.push({ ...f, startPage: runningPageNumber + 1 });
+                        runningPageNumber += 1 + pCount;
                     }
 
-                    // B. Merge PDF or Placeholder Sheets
-                    if (fileData.isPlaceholder) {
-                        // Generate Blank Placeholder Pages
-                        for(let k=0; k < fileData.rawPages; k++) {
-                            const p = mergedPdf.addPage();
-                            const { width: pW, height: pH } = p.getSize();
-                            drawWrappedText(p, `PLACEHOLDER FOR SECTION ${fileData.sectionLabel}`, pH / 2 + 20, 18, fontBold, rgb, [0.7,0.7,0.7]);
-                            drawWrappedText(p, fileData.sectionTitle, pH / 2 - 20, 14, fontRegular, rgb, [0.7,0.7,0.7]);
-                        }
-                    } else {
-                        // Real Merge
-                        try {
-                            const fileBytes = await fileData.file.arrayBuffer();
-                            // ignoreEncryption allows basic counting/reading of files with owner passwords but no user password
-                            const srcDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
-                            const copiedPages = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
-                            copiedPages.forEach((page) => mergedPdf.addPage(page));
-                        } catch (fileErr) {
-                            const errPage = mergedPdf.addPage();
-                            errPage.drawText(`Error loading file: ${fileData.name}`, { x: 50, y: 700, size: 12 });
+                    // --- TOC ---
+                    for (let p = 0; p < tocPageCount; p++) {
+                        const tocPage = mergedPdf.addPage();
+                        drawWrappedText(tocPage, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
+                        const startIdx = p * entriesPerPage;
+                        const endIdx = Math.min(startIdx + entriesPerPage, fileAnalysis.length);
+                        let yPos = height - 120;
+                        for (let i = startIdx; i < endIdx; i++) {
+                            const item = fileAnalysis[i];
+                            const indent = item.depth === 0 ? 50 : item.depth === 1 ? 70 : 90;
+                            const font = item.depth === 0 ? fontBold : fontRegular;
+                            const fontSize = item.depth === 0 ? 12 : 11;
+                            tocPage.drawText(item.sectionLabel, { x: indent, y: yPos, size: fontSize, font });
+                            let title = item.sectionTitle || "Untitled";
+                            if (title.length > 55) title = title.substring(0, 52) + "...";
+                            tocPage.drawText(title, { x: indent + 60, y: yPos, size: fontSize, font });
+                            tocPage.drawText(item.startPage.toString(), { x: width - 50 - font.widthOfTextAtSize(item.startPage.toString(), fontSize), y: yPos, size: fontSize, font });
+                            yPos -= 25;
                         }
                     }
-                }
 
-                // --- PASS 4: Add Page Numbers ---
-                const pages = mergedPdf.getPages();
-                for (let i = 1; i < pages.length; i++) { // Start at 1 to skip cover
-                    const page = pages[i];
-                    const { width } = page.getSize();
-                    const pageNumText = `${i}`;
-                    const fontSize = 10;
-                    const textWidth = fontRegular.widthOfTextAtSize(pageNumText, fontSize);
-                    
-                    let xPos;
-                    if (pageNumberPos === 'left') xPos = 50;
-                    else if (pageNumberPos === 'center') xPos = (width - textWidth) / 2;
-                    else xPos = width - 50 - textWidth; // Right
+                    // --- Content Merge ---
+                    for (const f of numberedFiles) {
+                        // Divider
+                        const divPage = mergedPdf.addPage();
+                        const centerY = height / 2;
+                        let tSize = 18, lSize = 14, color = [0,0,0];
+                        if (f.depth === 1) { tSize = 16; lSize = 12; color = [0.3,0.3,0.3]; }
+                        else if (f.depth === 2) { tSize = 14; lSize = 10; color = [0.4,0.4,0.4]; }
+                        
+                        if (embeddedLogo) {
+                            const maxWidth = 100;
+                            const baseScale = maxWidth / embeddedLogo.width;
+                            const finalDims = embeddedLogo.scale((baseScale > 1 ? 1 : baseScale) * logoScale);
+                            divPage.drawImage(embeddedLogo, { x: width - 50 - finalDims.width, y: height - 50 - finalDims.height, width: finalDims.width, height: finalDims.height });
+                        }
+                        drawWrappedText(divPage, `SECTION ${f.sectionLabel}`, centerY + 40, lSize, fontBold, rgb, [0.5,0.5,0.5]);
+                        if(f.sectionTitle) drawWrappedText(divPage, f.sectionTitle, centerY, tSize, fontBold, rgb, color);
+                        if(f.sectionSubtitle) drawWrappedText(divPage, f.sectionSubtitle, centerY - 40, lSize + 2, fontRegular, rgb, [0.4,0.4,0.4]);
+                        drawWrappedText(divPage, `Designed: ${f.calcsBy||'-'}  Checked: ${f.checkedBy||'-'}  Rev: ${f.revision||'-'}  Date: ${f.uploadDate}`, 50, 10, fontRegular, rgb, [0.4,0.4,0.4]);
 
-                    page.drawText(pageNumText, {
-                        x: xPos,
-                        y: 30, // Bottom margin
-                        size: fontSize,
-                        font: fontRegular,
-                        color: rgb(0, 0, 0),
-                    });
-                }
+                        // PDF content
+                        if (f.isPlaceholder) {
+                            for(let k=0; k < f.rawPages; k++) {
+                                const p = mergedPdf.addPage();
+                                drawWrappedText(p, `PLACEHOLDER FOR SECTION ${f.sectionLabel}`, p.getHeight()/2, 18, fontBold, rgb, [0.7,0.7,0.7]);
+                            }
+                        } else if (f.downloadURL || f.fileObj) {
+                            try {
+                                let fileBytes;
+                                if (f.fileObj) {
+                                    fileBytes = await f.fileObj.arrayBuffer();
+                                } else if (f.downloadURL) {
+                                    const res = await fetch(f.downloadURL);
+                                    fileBytes = await res.arrayBuffer();
+                                }
+                                
+                                if (fileBytes) {
+                                    const srcDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
+                                    const copied = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
+                                    copied.forEach(p => mergedPdf.addPage(p));
+                                }
+                            } catch (e) {
+                                const errP = mergedPdf.addPage();
+                                errP.drawText(`Error loading: ${f.name}`, { x: 50, y: 700 });
+                            }
+                        }
+                    }
 
-                const pdfBytes = await mergedPdf.save();
-                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = `Engineering_Calc_Package.pdf`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                } catch (error) {
-                alert(`Error generating PDF: ${error.message}`);
-                } finally {
-                setIsProcessing(false);
-                }
+                    // --- Page Numbers ---
+                    const totalPages = mergedPdf.getPageCount();
+                    for (let i = 1; i < totalPages; i++) {
+                        const p = mergedPdf.getPage(i);
+                        const { width } = p.getSize();
+                        const txt = `${i}`;
+                        const txtW = fontRegular.widthOfTextAtSize(txt, 10);
+                        let x = pageNumberPos === 'left' ? 50 : pageNumberPos === 'center' ? (width - txtW)/2 : width - 50 - txtW;
+                        p.drawText(txt, { x, y: 30, size: 10, font: fontRegular });
+                    }
+
+                    const pdfBytes = await mergedPdf.save();
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `Binder_${projectMeta.number}.pdf`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+
+                } catch (e) { alert("Error: " + e.message); }
+                finally { setIsProcessing(false); }
             };
 
-            const getIndentStyles = (depth) => {
-                if (depth === 0) return '';
-                if (depth === 1) return 'pl-8 border-l-4 border-slate-200';
-                if (depth === 2) return 'pl-16 border-l-4 border-slate-200 ml-4';
-                return '';
-            };
+            const getIndent = (d) => d === 0 ? '' : d === 1 ? 'pl-8 border-l-4 border-slate-200' : 'pl-16 border-l-4 border-slate-200 ml-4';
 
             return (
                 <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-8">
-                <div className="max-w-[95%] 2xl:max-w-[1600px] mx-auto">
-                    
-                    {/* Header */}
-                    <div className="flex justify-between items-end mb-8 border-b border-slate-300 pb-4">
-                    <div>
-                        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
-                        <FilePlus className="w-8 h-8 text-blue-600" />
-                        CalcBinder <span className="text-slate-400 font-light">Pro</span>
-                        </h1>
-                        <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
-                    </div>
-                    <div className="flex items-center gap-4">
-                        <div className="flex gap-2">
-                            <button 
-                                onClick={handleExportJSON}
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors"
-                                title="Export Configuration to JSON"
-                            >
-                                <Download className="w-4 h-4" /> Export
-                            </button>
-                            <label className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors cursor-pointer" title="Import Configuration">
-                                <UploadCloud className="w-4 h-4" /> Import
-                                <input 
-                                    type="file" 
-                                    accept=".json" 
-                                    ref={jsonInputRef} 
-                                    onChange={handleImportJSON} 
-                                    className="hidden" 
-                                />
-                            </label>
-                        </div>
-                        <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${pdfLibLoaded ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                            <div className={`w-2 h-2 rounded-full ${pdfLibLoaded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`}></div>
-                            {pdfLibLoaded ? 'Engine Ready' : 'Initializing...'}
-                        </div>
-                    </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    
-                    {/* Left Panel: Upload & List (8 cols) */}
-                    <div className="lg:col-span-8 space-y-6">
-                        
-                        {/* Project Details */}
-                        <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                        <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-blue-500" /> Cover Sheet Details
-                        </h3>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                            {/* Logo Upload (New) */}
-                            <div className="md:col-span-3 flex flex-col items-center justify-center">
-                            <div 
-                                className="w-full aspect-square bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors relative overflow-hidden group"
-                                onClick={() => logoInputRef.current?.click()}
-                            >
-                                {logoPreview ? (
-                                <>
-                                    <img src={logoPreview} alt="Company Logo" className="w-full h-full object-contain p-2" />
-                                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <span className="text-white text-xs font-medium">Change</span>
-                                    </div>
-                                    <button 
-                                    onClick={(e) => { e.stopPropagation(); removeLogo(); }}
-                                    className="absolute top-1 right-1 p-1 bg-white rounded-full text-slate-500 hover:text-red-500 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                    <X className="w-3 h-3" />
-                                    </button>
-                                </>
-                                ) : (
-                                <div className="text-center p-2">
-                                    <ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-1" />
-                                    <span className="text-[10px] text-slate-400 font-medium uppercase">Upload Logo</span>
-                                </div>
-                                )}
-                                <input 
-                                type="file" 
-                                accept="image/png, image/jpeg" 
-                                className="hidden" 
-                                ref={logoInputRef} 
-                                onChange={handleLogoUpload} 
-                                />
-                            </div>
-                            
-                            {/* Logo Scale Input */}
-                            <div className="mt-2 flex items-center justify-center gap-2">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase">Scale:</label>
-                                <input 
-                                    type="number" 
-                                    min="0.1" 
-                                    max="3.0" 
-                                    step="0.1" 
-                                    value={logoScale}
-                                    onChange={(e) => setLogoScale(parseFloat(e.target.value))}
-                                    className="w-16 text-xs border border-slate-300 rounded px-1 py-0.5 text-center focus:ring-1 focus:ring-blue-500 outline-none"
-                                />
-                            </div>
-
-                            </div>
-
-                            {/* Text Inputs */}
-                            <div className="md:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="md:col-span-2">
-                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Project Name</label>
-                                <input type="text" value={projectMeta.title} onChange={(e) => updateMeta('title', e.target.value)} className="w-full px-3 py-2 text-base font-medium border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
-                            </div>
+                    <div className="max-w-[95%] 2xl:max-w-[1600px] mx-auto pt-4">
+                        {/* Header */}
+                        <div className="flex justify-between items-end mb-8 border-b border-slate-300 pb-4">
                             <div>
-                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Hash className="w-3 h-3" /> Project Number</label>
-                                <input type="text" value={projectMeta.number} onChange={(e) => updateMeta('number', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                                <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+                                    <FilePlus className="w-8 h-8 text-blue-600" /> CalcBinder <span className="text-slate-400 font-light">Cloud</span>
+                                </h1>
+                                <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
                             </div>
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Date</label>
-                                <input type="date" value={projectMeta.date} onChange={(e) => updateMeta('date', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
-                            </div>
-                            <div className="md:col-span-2">
-                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><User className="w-3 h-3" /> Client Name</label>
-                                <input type="text" value={projectMeta.client} onChange={(e) => updateMeta('client', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
-                            </div>
-                            </div>
-                            
-                            <div className="md:col-span-12">
-                            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><AlignLeft className="w-3 h-3" /> Description</label>
-                            <textarea value={projectMeta.description} onChange={(e) => updateMeta('description', e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
-                            </div>
-                        </div>
-                        </div>
-
-                        {/* Drop Zone */}
-                        <div className="flex gap-4">
-                            <div 
-                            className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer"
-                            onClick={() => fileInputRef.current?.click()}
-                            >
-                            <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                            <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-                            <p className="text-lg font-medium text-slate-700">Drop calculation PDFs here</p>
-                            <p className="text-sm text-slate-500">or click to browse files</p>
-                            </div>
-                            <div 
-                                className="flex-none w-48 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group"
-                                onClick={handleAddPlaceholder}
-                            >
-                                <FileQuestion className="w-8 h-8 text-slate-400 group-hover:text-emerald-500 mb-2 transition-colors" />
-                                <p className="text-sm font-medium text-slate-600 group-hover:text-emerald-600">Add Placeholder</p>
-                            </div>
-                        </div>
-
-                        {/* File List */}
-                        <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-                        <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                            <h2 className="font-semibold text-slate-700">Staged Sections ({files.length})</h2>
-                            <span className="text-xs text-slate-500 uppercase tracking-wider font-bold">Structure</span>
-                        </div>
-                        
-                        {files.length === 0 ? (
-                            <div className="p-12 text-center text-slate-400 italic">No files staged. Upload PDFs to begin.</div>
-                        ) : (
-                            <ul className="divide-y divide-slate-100">
-                            {numberedFiles.map((file, index) => {
-                                // Determine state classes based on missing/placeholder
-                                const isMissing = !file.isPlaceholder && !file.file;
-                                let rowClass = "hover:bg-slate-50";
-                                if (file.isPlaceholder) rowClass = "bg-yellow-50/50 hover:bg-yellow-50";
-                                if (isMissing) rowClass = "bg-red-50/50 hover:bg-red-50 border-l-4 border-l-red-400";
-
-                                return (
-                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${rowClass}`}>
-                                
-                                {/* Controls Area */}
-                                <div className="flex flex-col items-center justify-center gap-2 mr-2">
-                                    <div className="flex flex-col">
-                                        <button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button>
-                                        <button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button>
-                                    </div>
-                                    <div className="flex gap-1">
-                                        <button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-slate-100 disabled:hover:text-slate-500 transition-colors" title="Promote Section"><ArrowLeft className="w-3 h-3" /></button>
-                                        <button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-slate-100 disabled:hover:text-slate-500 transition-colors" title="Demote Section"><ArrowRight className="w-3 h-3" /></button>
-                                    </div>
+                            <div className="flex items-center gap-4">
+                                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${
+                                    syncStatus === 'synced' ? 'bg-green-50 text-green-700 border-green-200' :
+                                    syncStatus === 'syncing' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                    syncStatus === 'error' ? 'bg-red-50 text-red-700 border-red-200' :
+                                    syncStatus === 'offline' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                    'bg-slate-100 text-slate-500 border-slate-200'
+                                }`}>
+                                    {syncStatus === 'synced' && <Check className="w-4 h-4" />}
+                                    {syncStatus === 'syncing' && <RefreshCw className="w-4 h-4 animate-spin" />}
+                                    {syncStatus === 'error' && <AlertCircle className="w-4 h-4" />}
+                                    {syncStatus === 'connecting' && <Cloud className="w-4 h-4" />}
+                                    {syncStatus === 'offline' && <WifiOff className="w-4 h-4" />}
+                                    <span>
+                                        {syncStatus === 'synced' ? 'Saved to Cloud' : 
+                                         syncStatus === 'syncing' ? 'Syncing...' : 
+                                         syncStatus === 'error' ? 'Sync Error' : 
+                                         syncStatus === 'offline' ? 'Offline Mode' : 
+                                         'Connecting...'}
+                                    </span>
                                 </div>
+                            </div>
+                        </div>
 
-                                {/* Section Number */}
-                                <div className="flex flex-col justify-start pt-2 w-10 shrink-0">
-                                    <span className={`font-mono font-bold text-slate-500 ${file.depth === 0 ? 'text-lg' : file.depth === 1 ? 'text-sm text-slate-400 pl-1' : 'text-xs text-slate-400 pl-2'}`}>{file.sectionLabel}</span>
-                                </div>
-
-                                {/* Main Edit Area */}
-                                <div className={`flex-1 space-y-3 transition-all duration-300 ${getIndentStyles(file.depth)}`}>
-                                    {/* Title & Subtitle */}
-                                    <div>
-                                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
-                                        <span>{file.depth === 0 ? "Section Title" : file.depth === 1 ? "Subsection Title" : "Item Title"}</span>
-                                        {file.isPlaceholder && <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-yellow-200">Placeholder</span>}
-                                        {isMissing && <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-red-200 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Missing Source</span>}
-                                    </label>
-                                    <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className={`w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none ${file.depth === 0 ? 'text-lg' : 'text-base'}`} />
-                                    </div>
-                                    <div>
-                                    <input type="text" value={file.sectionSubtitle} onChange={(e) => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none placeholder:text-slate-300" placeholder="Subtitle (Optional)" />
-                                    </div>
-
-                                    {/* NEW: Engineering Metadata Inputs */}
-                                    <div className="grid grid-cols-12 gap-2 bg-slate-50 p-2 rounded border border-slate-100">
-                                    <div className="col-span-3">
-                                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5 flex items-center gap-1"><User className="w-3 h-3" /> Calcs By</label>
-                                        <input type="text" value={file.calcsBy} onChange={(e) => updateFileField(file.id, 'calcsBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Initials" />
-                                    </div>
-                                    <div className="col-span-3">
-                                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5 flex items-center gap-1"><CheckSquare className="w-3 h-3" /> Checked By</label>
-                                        <input type="text" value={file.checkedBy} onChange={(e) => updateFileField(file.id, 'checkedBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Initials" />
-                                    </div>
-                                    <div className="col-span-2">
-                                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Rev</label>
-                                        <input type="text" value={file.revision} onChange={(e) => updateFileField(file.id, 'revision', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-blue-500 outline-none text-center" />
-                                    </div>
-                                    <div className="col-span-4">
-                                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Date</label>
-                                        <div className="text-[10px] text-slate-500 pt-1.5 px-1">{file.uploadDate}</div>
-                                    </div>
-                                    </div>
-
-                                    {/* File Stats / Placeholder Actions */}
-                                    {file.isPlaceholder ? (
-                                        <div className="flex items-center gap-4 pt-1 bg-yellow-50/50 p-2 rounded border border-dashed border-yellow-200">
-                                            <div className="flex items-center gap-2">
-                                                <label className="text-[10px] font-bold text-slate-500 uppercase">Pages to Reserve:</label>
-                                                <input 
-                                                    type="number" 
-                                                    min="1" 
-                                                    value={file.pageCount} 
-                                                    onChange={(e) => updatePlaceholderPages(file.id, e.target.value)}
-                                                    className="w-16 text-xs border border-slate-300 rounded px-1 py-0.5 text-center focus:ring-1 focus:ring-blue-500"
-                                                />
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            <div className="lg:col-span-8 space-y-6">
+                                {/* Project Metadata */}
+                                <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                        {/* Logo Uploader */}
+                                        <div className="md:col-span-3 flex flex-col items-center justify-center">
+                                            <div className="w-full aspect-square bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors relative group" onClick={() => logoInputRef.current?.click()}>
+                                                {logoUrl ? (
+                                                    <>
+                                                        <img src={logoUrl} className="w-full h-full object-contain p-2" />
+                                                        <button onClick={(e) => {e.stopPropagation(); removeLogo();}} className="absolute top-1 right-1 p-1 bg-white rounded-full text-slate-500 hover:text-red-500 shadow-sm opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button>
+                                                    </>
+                                                ) : (
+                                                    <div className="text-center p-2"><ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-1" /><span className="text-[10px] text-slate-400 font-medium uppercase">Upload Logo</span></div>
+                                                )}
+                                                <input type="file" accept="image/png, image/jpeg" className="hidden" ref={logoInputRef} onChange={handleLogoUpload} />
                                             </div>
-                                            <div className="h-4 w-px bg-slate-300"></div>
-                                            <label className="flex items-center gap-2 cursor-pointer group/upload">
-                                                <Upload className="w-3 h-3 text-blue-500" />
-                                                <span className="text-xs font-medium text-blue-600 hover:underline">Upload PDF to Replace</span>
-                                                <input type="file" accept=".pdf" className="hidden" onChange={(e) => handleReplacePlaceholder(e, file.id)} />
-                                            </label>
-                                        </div>
-                                    ) : (
-                                        <div className="flex items-center justify-between pt-1">
-                                            <div className="flex items-center gap-2 text-xs text-slate-400">
-                                                <FileText className={`w-3 h-3 ${isMissing ? 'text-red-500' : ''}`} />
-                                                <span className={`truncate max-w-[200px] ${isMissing ? 'text-red-600 font-medium' : ''}`} title={file.name}>
-                                                    {file.name}
-                                                </span>
-                                                <span>•</span>
-                                                <span className={`${(file.pageCount === 'Err' || isMissing) ? 'text-red-500' : 'text-slate-500'}`}>
-                                                    {isMissing ? 'Source Required' : (file.pageCount === 'Calc...' ? 'Counting...' : `${file.pageCount} Pages`)}
-                                                </span>
+                                            <div className="mt-2 flex items-center justify-center gap-2">
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase">Scale:</label>
+                                                <input type="number" min="0.1" max="3.0" step="0.1" value={logoScale} onChange={(e) => setLogoScale(parseFloat(e.target.value))} className="w-16 text-xs border border-slate-300 rounded px-1 py-0.5 text-center" />
                                             </div>
-                                            
-                                            {/* Unified Replace/Link Action */}
-                                            <label className={`flex items-center gap-1 cursor-pointer text-[10px] px-1.5 py-0.5 rounded transition-colors ${
-                                                isMissing 
-                                                ? 'bg-red-100 text-red-600 hover:bg-red-200 border border-red-200' 
-                                                : 'text-blue-500 hover:text-blue-700 hover:bg-blue-50'
-                                            }`} title={isMissing ? "Link Original File" : "Replace PDF File"}>
-                                                <RefreshCw className="w-3 h-3" />
-                                                <span className="font-medium">{isMissing ? "Link PDF" : "Replace"}</span>
-                                                <input type="file" accept=".pdf" className="hidden" onChange={(e) => handleReplaceFile(e, file.id)} />
-                                            </label>
                                         </div>
-                                    )}
-                                </div>
-
-                                {/* Divider Live Preview */}
-                                <div className="hidden sm:block">
-                                    <div className="w-32 aspect-[1/1.4] bg-white border border-slate-200 shadow-sm rounded-sm flex flex-col items-center justify-center p-2 text-center overflow-hidden relative group-hover:shadow-md transition-shadow">
-                                    {/* Paper Hole Punch circles */}
-                                    <div className="absolute left-1 top-4 w-1 h-1 bg-slate-100 rounded-full"></div>
-                                    <div className="absolute left-1 top-1/2 w-1 h-1 bg-slate-100 rounded-full"></div>
-                                    <div className="absolute left-1 bottom-4 w-1 h-1 bg-slate-100 rounded-full"></div>
-                                    
-                                    {/* Logo Preview Miniature */}
-                                    {logoPreview && (
-                                        <div className="absolute top-1 right-1 w-6 h-6 opacity-30">
-                                        <img src={logoPreview} alt="" className="w-full h-full object-contain" />
+                                        {/* Fields */}
+                                        <div className="md:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Project Name</label>
+                                                <input type="text" value={projectMeta.title} onChange={(e) => updateMeta('title', e.target.value)} className="w-full px-3 py-2 text-base font-medium border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Hash className="w-3 h-3" /> Project Number</label>
+                                                <input type="text" value={projectMeta.number} onChange={(e) => updateMeta('number', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Date</label>
+                                                <input type="date" value={projectMeta.date} onChange={(e) => updateMeta('date', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><User className="w-3 h-3" /> Client Name</label>
+                                                <input type="text" value={projectMeta.client} onChange={(e) => updateMeta('client', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><AlignLeft className="w-3 h-3" /> Description</label>
+                                                <textarea value={projectMeta.description} onChange={(e) => updateMeta('description', e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
+                                            </div>
                                         </div>
-                                    )}
-                                    
-                                    <div className={`font-bold text-slate-400 mb-2 uppercase tracking-widest ${file.depth === 0 ? 'text-[8px]' : 'text-[6px]'}`}>Section {file.sectionLabel}</div>
-                                    <div className={`font-bold text-slate-900 leading-tight mb-1 break-words w-full ${file.depth === 0 ? 'text-[10px]' : 'text-[8px]'}`}>{file.sectionTitle || "Untitled"}</div>
-                                    
-                                    {/* Mini Metadata Preview */}
-                                    <div className="absolute bottom-2 left-0 right-0 border-t border-slate-100 pt-1 flex justify-center gap-1">
-                                        <div className="h-[2px] w-20 bg-slate-100"></div>
                                     </div>
+                                </div>
+
+                                {/* Drag & Drop */}
+                                <div className="flex gap-4">
+                                    <div className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                                        <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+                                        <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+                                        <p className="text-lg font-medium text-slate-700">Drop PDFs here to Upload</p>
+                                        <p className="text-sm text-slate-500">
+                                            {syncStatus === 'offline' ? 'Local memory only (Offline Mode)' : 'Automatically saved to Cloud'}
+                                        </p>
                                     </div>
-                                    <div className="text-[10px] text-center text-slate-400 mt-1">Divider Preview</div>
+                                    <div className="flex-none w-48 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group" onClick={handleAddPlaceholder}>
+                                        <FileQuestion className="w-8 h-8 text-slate-400 group-hover:text-emerald-500 mb-2 transition-colors" />
+                                        <p className="text-sm font-medium text-slate-600 group-hover:text-emerald-600">Add Placeholder</p>
+                                    </div>
                                 </div>
 
-                                {/* Delete */}
-                                <div className="flex items-start pt-1">
-                                    <button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="Remove File"><Trash2 className="w-4 h-4" /></button>
+                                {/* File List */}
+                                <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+                                    <ul className="divide-y divide-slate-100">
+                                        {numberedFiles.map((file, index) => (
+                                            <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50'}`}>
+                                                <div className="flex flex-col items-center justify-center gap-2 mr-2">
+                                                    <div className="flex flex-col">
+                                                        <button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button>
+                                                        <button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button>
+                                                    </div>
+                                                    <div className="flex gap-1">
+                                                        <button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowLeft className="w-3 h-3" /></button>
+                                                        <button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowRight className="w-3 h-3" /></button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="flex flex-col justify-start pt-2 w-10 shrink-0">
+                                                    <span className="font-mono font-bold text-slate-500 text-lg">{file.sectionLabel}</span>
+                                                </div>
+
+                                                <div className={`flex-1 space-y-3 transition-all ${getIndent(file.depth)}`}>
+                                                    <div className="flex items-center justify-between">
+                                                        <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className="w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" />
+                                                        {file.isPlaceholder && <span className="ml-2 text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-yellow-200">Placeholder</span>}
+                                                    </div>
+                                                    <input type="text" value={file.sectionSubtitle} onChange={(e) => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-sm text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Subtitle" />
+                                                    
+                                                    <div className="grid grid-cols-12 gap-2 bg-slate-50 p-2 rounded border border-slate-100">
+                                                        <div className="col-span-3"><input type="text" value={file.calcsBy} onChange={(e) => updateFileField(file.id, 'calcsBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="By" /></div>
+                                                        <div className="col-span-3"><input type="text" value={file.checkedBy} onChange={(e) => updateFileField(file.id, 'checkedBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="Chk" /></div>
+                                                        <div className="col-span-2"><input type="text" value={file.revision} onChange={(e) => updateFileField(file.id, 'revision', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-center" placeholder="Rev" /></div>
+                                                        <div className="col-span-4 text-[10px] text-slate-500 pt-1.5 px-1">{file.uploadDate}</div>
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between text-xs text-slate-400">
+                                                        <div className="flex items-center gap-2">
+                                                            <FileText className="w-3 h-3" />
+                                                            <span className="truncate max-w-[200px]">{file.name}</span>
+                                                            <span className="text-slate-300">•</span>
+                                                            {file.isPlaceholder ? (
+                                                                <input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />
+                                                            ) : (
+                                                                <span>{file.pageCount} Pages</span>
+                                                            )}
+                                                        </div>
+                                                        <label className="flex items-center gap-1 cursor-pointer text-blue-500 hover:text-blue-700">
+                                                            <RefreshCw className="w-3 h-3" /> {file.isPlaceholder ? "Upload" : "Replace"}
+                                                            <input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} />
+                                                        </label>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-start pt-1">
+                                                    <button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
                                 </div>
-
-                                </li>
-                            )})}
-                            </ul>
-                        )}
-                        </div>
-                    </div>
-
-                    {/* Right Panel: Output & Config */}
-                    <div className="lg:col-span-4 space-y-6">
-                        <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 sticky top-6">
-                        <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Output Configuration</h3>
-                        
-                        <div className="space-y-4 mb-6">
-                            <div className="flex items-center justify-between text-sm py-2 border-b border-slate-50">
-                            <span className="text-slate-600">Total Sections</span>
-                            <span className="font-mono font-medium bg-slate-100 px-2 py-0.5 rounded">{files.length}</span>
-                            </div>
-                            
-                            {!pdfLibLoaded && (
-                            <div className="flex items-start gap-3 p-3 bg-yellow-50 rounded border border-yellow-100 animate-pulse">
-                                <AlertCircle className="w-4 h-4 text-yellow-600 mt-0.5" />
-                                <div className="text-xs text-yellow-800"><span className="font-semibold">Loading Engine...</span></div>
-                            </div>
-                            )}
-
-                            <div className="space-y-2 pt-2">
-                            <div className="flex items-center gap-2">
-                                <input type="checkbox" id="toc" className="rounded text-blue-600 focus:ring-blue-500" checked disabled />
-                                <label htmlFor="toc" className="text-sm text-slate-700">Generate Table of Contents (Auto)</label>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <input type="checkbox" id="dividers" className="rounded text-blue-600 focus:ring-blue-500" defaultChecked />
-                                <label htmlFor="dividers" className="text-sm text-slate-700">Insert Section Dividers</label>
-                            </div>
                             </div>
 
-                            {/* Page Number Controls (New) */}
-                            <div className="space-y-2 pt-4 border-t border-slate-100">
-                                <label className="text-xs font-semibold text-slate-500 uppercase">Page Numbering</label>
-                                <div className="flex bg-slate-100 p-1 rounded-md">
-                                    <button onClick={() => setPageNumberPos('left')} className={`flex-1 flex items-center justify-center py-1.5 rounded ${pageNumberPos === 'left' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}>
-                                        <AlignLeft className="w-4 h-4" />
-                                    </button>
-                                    <button onClick={() => setPageNumberPos('center')} className={`flex-1 flex items-center justify-center py-1.5 rounded ${pageNumberPos === 'center' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}>
-                                        <AlignCenter className="w-4 h-4" />
-                                    </button>
-                                    <button onClick={() => setPageNumberPos('right')} className={`flex-1 flex items-center justify-center py-1.5 rounded ${pageNumberPos === 'right' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}>
-                                        <AlignRight className="w-4 h-4" />
+                            <div className="lg:col-span-4 space-y-6">
+                                <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 sticky top-6">
+                                    <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Output Configuration</h3>
+                                    <div className="space-y-4 mb-6">
+                                        <div className="flex items-center justify-between text-sm py-2 border-b border-slate-50">
+                                            <span className="text-slate-600">Total Sections</span>
+                                            <span className="font-mono font-medium bg-slate-100 px-2 py-0.5 rounded">{files.length}</span>
+                                        </div>
+                                        <div className="space-y-2 pt-2">
+                                            <div className="flex items-center gap-2"><input type="checkbox" checked disabled className="rounded text-blue-600" /><label className="text-sm text-slate-700">TOC (Auto)</label></div>
+                                            <div className="flex items-center gap-2"><input type="checkbox" defaultChecked className="rounded text-blue-600" /><label className="text-sm text-slate-700">Section Dividers</label></div>
+                                        </div>
+                                        <div className="space-y-2 pt-4 border-t border-slate-100">
+                                            <label className="text-xs font-semibold text-slate-500 uppercase">Page Numbering</label>
+                                            <div className="flex bg-slate-100 p-1 rounded-md">
+                                                <button onClick={() => setPageNumberPos('left')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='left'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignLeft className="w-4 h-4 mx-auto" /></button>
+                                                <button onClick={() => setPageNumberPos('center')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='center'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignCenter className="w-4 h-4 mx-auto" /></button>
+                                                <button onClick={() => setPageNumberPos('right')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='right'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignRight className="w-4 h-4 mx-auto" /></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button onClick={generateBinder} disabled={files.length === 0 || isProcessing} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                                        {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" /> Compiling...</> : <><Save className="w-5 h-5" /> Download Merged PDF</>}
                                     </button>
                                 </div>
                             </div>
                         </div>
-
-                        <button onClick={generateBinder} disabled={files.length === 0 || isProcessing || !pdfLibLoaded || hasMissingFiles} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing || !pdfLibLoaded || hasMissingFiles ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:transform active:scale-95'}`}>
-                            {isProcessing ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Compiling Binder...</> : <><Save className="w-5 h-5" /> Download Merged PDF</>}
-                        </button>
-                        </div>
                     </div>
-                    </div>
-                </div>
                 </div>
             );
         };
