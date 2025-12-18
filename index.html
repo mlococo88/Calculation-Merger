@@ -26,7 +26,7 @@
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
-            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key
+            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS ---
@@ -35,8 +35,54 @@
         import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
         import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
 
+        // --- ERROR BOUNDARY COMPONENT ---
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+
+            componentDidCatch(error, errorInfo) {
+                console.error("Uncaught error:", error, errorInfo);
+            }
+
+            handleReset = () => {
+                localStorage.removeItem('calcBinder_firebaseConfig');
+                window.location.reload();
+            }
+
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="min-h-screen flex items-center justify-center bg-red-50 p-8 text-center">
+                            <div className="bg-white p-8 rounded-lg shadow-xl max-w-md border border-red-100">
+                                <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+                                <h1 className="text-xl font-bold text-red-700 mb-2">Something went wrong</h1>
+                                <p className="text-slate-600 mb-6 text-sm">
+                                    The application encountered a critical error. This is usually due to a malformed configuration.
+                                </p>
+                                <div className="bg-slate-100 p-2 rounded text-xs font-mono text-left mb-6 overflow-auto max-h-32">
+                                    {this.state.error && this.state.error.toString()}
+                                </div>
+                                <button 
+                                    onClick={this.handleReset}
+                                    className="w-full py-2 bg-red-600 text-white rounded font-semibold hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <RotateCcw className="w-4 h-4" /> Reset Configuration
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+                return this.props.children; 
+            }
+        }
+
         // --- FIREBASE INIT LOGIC ---
-        // 1. Try to load config from LocalStorage
         const savedConfig = localStorage.getItem('calcBinder_firebaseConfig');
         let firebaseConfig = null;
         let isConfigured = false;
@@ -44,16 +90,15 @@
         if (savedConfig) {
             try {
                 firebaseConfig = JSON.parse(savedConfig);
-                // Basic validation
                 if (firebaseConfig.apiKey && firebaseConfig.projectId) {
                     isConfigured = true;
                 }
             } catch (e) {
                 console.error("Invalid saved config", e);
+                localStorage.removeItem('calcBinder_firebaseConfig');
             }
         }
 
-        // 2. Initialize Firebase Global Vars
         let app, auth, db, storage;
 
         if (isConfigured) {
@@ -64,7 +109,8 @@
                 storage = getStorage(app);
             } catch (e) {
                 console.error("Firebase Init Error:", e);
-                isConfigured = false; // Fallback to setup screen if init fails
+                isConfigured = false; 
+                localStorage.removeItem('calcBinder_firebaseConfig'); // Auto-clear bad config
             }
         }
 
@@ -75,37 +121,66 @@
             const [error, setError] = useState('');
 
             const handleSave = () => {
+                setError('');
                 try {
-                    // Try to parse the input (it might be the JS object or JSON)
-                    // If user pastes "const firebaseConfig = { ... };", clean it up
-                    let cleanInput = configInput.trim();
-                    if (cleanInput.startsWith('const firebaseConfig =')) {
-                        cleanInput = cleanInput.replace('const firebaseConfig =', '').replace(/;$/, '');
+                    let input = configInput.trim();
+                    
+                    // 1. Remove comments (// or /* */) which act as syntax errors in eval/parsing
+                    input = input.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+
+                    // 2. Remove JS declarations
+                    input = input.replace(/^(const|var|let)\s+\w+\s*=\s*/, '');
+                    input = input.replace(/;$/, ''); 
+
+                    let config;
+                    try {
+                        // 3. Try standard JSON parse
+                        config = JSON.parse(input);
+                    } catch (jsonErr) {
+                        try {
+                            // 4. Fallback: Evaluate as JS Object
+                            config = new Function('return ' + input)();
+                        } catch (evalErr) {
+                            throw new Error("Could not parse text. Ensure you copied the full object { ... }.");
+                        }
                     }
-                    // Relaxed JSON parsing (handling unquoted keys if user pastes JS object)
-                    // For security/simplicity in this context, we'll ask for JSON or valid Object literal string
-                    // But standard JSON.parse is safest. Let's assume they copy the JSON object.
                     
-                    // Simple hack to allow unquoted keys from typical JS config copy-paste:
-                    // (Note: This is a loose parser for convenience)
-                    const jsonStr = cleanInput.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2": ').replace(/'/g, '"'); 
-                    
-                    const config = JSON.parse(jsonStr);
-                    
-                    if (!config.apiKey || !config.projectId) {
-                        throw new Error("Missing apiKey or projectId");
+                    if (!config || !config.apiKey || !config.projectId) {
+                        throw new Error("Invalid Config: Missing 'apiKey' or 'projectId'.");
+                    }
+
+                    // 5. TEST CONNECTION before saving
+                    // We attempt to initialize a temp app. If it throws, the config is garbage.
+                    try {
+                        // We don't need to actually do network calls, just see if the SDK accepts the config object
+                        initializeApp(config, "tempAppCheck"); 
+                    } catch (initErr) {
+                        throw new Error("Firebase SDK rejected this configuration: " + initErr.message);
                     }
 
                     localStorage.setItem('calcBinder_firebaseConfig', JSON.stringify(config));
                     onSave();
                 } catch (e) {
-                    setError("Invalid Configuration Format. Please paste the JSON object from Firebase Console.");
+                    setError(e.message);
                 }
+            };
+
+            const handleReset = () => {
+                localStorage.removeItem('calcBinder_firebaseConfig');
+                window.location.reload();
             };
 
             return (
                 <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-                    <div className="bg-white max-w-md w-full p-8 rounded-xl shadow-lg border border-slate-200">
+                    <div className="bg-white max-w-md w-full p-8 rounded-xl shadow-lg border border-slate-200 relative">
+                        <button 
+                            onClick={handleReset}
+                            className="absolute top-4 right-4 text-slate-400 hover:text-red-500 transition-colors"
+                            title="Reset / Clear Configuration"
+                        >
+                            <RotateCcw className="w-4 h-4" />
+                        </button>
+
                         <div className="flex justify-center mb-6">
                             <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center">
                                 <Lock className="w-8 h-8 text-blue-600" />
@@ -113,23 +188,24 @@
                         </div>
                         <h1 className="text-2xl font-bold text-center text-slate-900 mb-2">Project Setup</h1>
                         <p className="text-center text-slate-500 mb-6 text-sm">
-                            This application uses Firebase for cloud storage. To begin, please paste your Firebase configuration object below.
+                            Paste your Firebase Configuration object below.<br/>
+                            <span className="text-xs text-slate-400">Ensure Anonymous Auth is enabled in Firebase Console.</span>
                         </p>
                         
                         <div className="bg-slate-50 p-4 rounded border border-slate-200 mb-4">
-                            <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Firebase Configuration JSON</label>
+                            <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Firebase Config</label>
                             <textarea 
                                 className="w-full h-32 bg-white border border-slate-300 rounded p-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                                placeholder='{ "apiKey": "...", "authDomain": "...", ... }'
+                                placeholder='const firebaseConfig = { ... }'
                                 value={configInput}
                                 onChange={(e) => setConfigInput(e.target.value)}
                             />
                         </div>
 
                         {error && (
-                            <div className="flex items-center gap-2 text-red-600 text-xs mb-4 bg-red-50 p-2 rounded">
-                                <AlertCircle className="w-4 h-4" />
-                                {error}
+                            <div className="flex items-start gap-2 text-red-600 text-xs mb-4 bg-red-50 p-2 rounded">
+                                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                                <span>{error}</span>
                             </div>
                         )}
 
@@ -139,9 +215,6 @@
                         >
                             <Key className="w-4 h-4" /> Save Configuration
                         </button>
-                        <p className="text-center text-xs text-slate-400 mt-4">
-                            Configuration is saved locally in your browser.
-                        </p>
                     </div>
                 </div>
             );
@@ -197,7 +270,7 @@
                         setUser(currentUser);
                         setSyncStatus('synced');
                         
-                        // Listen to Firestore for changes
+                        // Listen to Firestore
                         try {
                             const docRef = doc(db, "users", currentUser.uid, "projects", "active");
                             const unsubDoc = onSnapshot(docRef, (docSnap) => {
@@ -234,7 +307,7 @@
                 return () => unsubscribe();
             }, []);
 
-            // --- 3. Auto-Save Logic (Cloud or Local) ---
+            // --- 3. Auto-Save Logic ---
             useEffect(() => {
                 const saveData = async () => {
                     if (syncStatus === 'offline') return; 
@@ -271,7 +344,6 @@
 
             // --- File Handling Functions ---
 
-            // Upload a single file to Firebase Storage and return the URL
             const uploadFileToFirebase = async (file) => {
                 if (!user) return null;
                 const fileRef = ref(storage, `users/${user.uid}/files/${crypto.randomUUID()}-${file.name}`);
@@ -652,6 +724,11 @@
                 finally { setIsProcessing(false); }
             };
 
+            const handleLogout = () => {
+                localStorage.removeItem('calcBinder_firebaseConfig');
+                window.location.reload();
+            };
+
             const getIndent = (d) => d === 0 ? '' : d === 1 ? 'pl-8 border-l-4 border-slate-200' : 'pl-16 border-l-4 border-slate-200 ml-4';
 
             return (
@@ -686,6 +763,13 @@
                                          'Connecting...'}
                                     </span>
                                 </div>
+                                <button 
+                                    onClick={handleLogout}
+                                    className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                                    title="Disconnect & Clear Config"
+                                >
+                                    <RotateCcw className="w-5 h-5" />
+                                </button>
                             </div>
                         </div>
 
@@ -848,7 +932,7 @@
         };
 
         const root = createRoot(document.getElementById('root'));
-        root.render(isConfigured ? <CalcBinder /> : <SetupScreen onSave={() => window.location.reload()} />);
+        root.render(<ErrorBoundary><React.Fragment>{isConfigured ? <CalcBinder /> : <SetupScreen onSave={() => window.location.reload()} />}</React.Fragment></ErrorBoundary>);
     </script>
 </body>
 </html>
