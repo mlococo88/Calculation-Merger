@@ -110,7 +110,7 @@
             } catch (e) {
                 console.error("Firebase Init Error:", e);
                 isConfigured = false; 
-                localStorage.removeItem('calcBinder_firebaseConfig'); // Auto-clear bad config
+                localStorage.removeItem('calcBinder_firebaseConfig'); 
             }
         }
 
@@ -124,21 +124,15 @@
                 setError('');
                 try {
                     let input = configInput.trim();
-                    
-                    // 1. Remove comments (// or /* */) which act as syntax errors in eval/parsing
                     input = input.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-
-                    // 2. Remove JS declarations
                     input = input.replace(/^(const|var|let)\s+\w+\s*=\s*/, '');
                     input = input.replace(/;$/, ''); 
 
                     let config;
                     try {
-                        // 3. Try standard JSON parse
                         config = JSON.parse(input);
                     } catch (jsonErr) {
                         try {
-                            // 4. Fallback: Evaluate as JS Object
                             config = new Function('return ' + input)();
                         } catch (evalErr) {
                             throw new Error("Could not parse text. Ensure you copied the full object { ... }.");
@@ -149,10 +143,7 @@
                         throw new Error("Invalid Config: Missing 'apiKey' or 'projectId'.");
                     }
 
-                    // 5. TEST CONNECTION before saving
-                    // We attempt to initialize a temp app. If it throws, the config is garbage.
                     try {
-                        // We don't need to actually do network calls, just see if the SDK accepts the config object
                         initializeApp(config, "tempAppCheck"); 
                     } catch (initErr) {
                         throw new Error("Firebase SDK rejected this configuration: " + initErr.message);
@@ -173,14 +164,9 @@
             return (
                 <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
                     <div className="bg-white max-w-md w-full p-8 rounded-xl shadow-lg border border-slate-200 relative">
-                        <button 
-                            onClick={handleReset}
-                            className="absolute top-4 right-4 text-slate-400 hover:text-red-500 transition-colors"
-                            title="Reset / Clear Configuration"
-                        >
+                        <button onClick={handleReset} className="absolute top-4 right-4 text-slate-400 hover:text-red-500 transition-colors" title="Reset / Clear Configuration">
                             <RotateCcw className="w-4 h-4" />
                         </button>
-
                         <div className="flex justify-center mb-6">
                             <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center">
                                 <Lock className="w-8 h-8 text-blue-600" />
@@ -191,28 +177,17 @@
                             Paste your Firebase Configuration object below.<br/>
                             <span className="text-xs text-slate-400">Ensure Anonymous Auth is enabled in Firebase Console.</span>
                         </p>
-                        
                         <div className="bg-slate-50 p-4 rounded border border-slate-200 mb-4">
                             <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Firebase Config</label>
-                            <textarea 
-                                className="w-full h-32 bg-white border border-slate-300 rounded p-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                                placeholder='const firebaseConfig = { ... }'
-                                value={configInput}
-                                onChange={(e) => setConfigInput(e.target.value)}
-                            />
+                            <textarea className="w-full h-32 bg-white border border-slate-300 rounded p-2 text-xs font-mono focus:ring-2 focus:ring-blue-500 outline-none" placeholder='const firebaseConfig = { ... }' value={configInput} onChange={(e) => setConfigInput(e.target.value)} />
                         </div>
-
                         {error && (
                             <div className="flex items-start gap-2 text-red-600 text-xs mb-4 bg-red-50 p-2 rounded">
                                 <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
                                 <span>{error}</span>
                             </div>
                         )}
-
-                        <button 
-                            onClick={handleSave}
-                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
-                        >
+                        <button onClick={handleSave} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
                             <Key className="w-4 h-4" /> Save Configuration
                         </button>
                     </div>
@@ -221,9 +196,9 @@
         };
 
         const CalcBinder = () => {
-            // --- State ---
             const [user, setUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState('connecting'); // connecting, synced, syncing, error, offline
+            const [authError, setAuthError] = useState(null); // New state for detailed error message
             const [files, setFiles] = useState([]);
             const [isProcessing, setIsProcessing] = useState(false);
             
@@ -235,8 +210,8 @@
                 description: "Structural analysis and design of primary framing members."
             });
 
-            const [logo, setLogo] = useState(null); // Blob for upload
-            const [logoUrl, setLogoUrl] = useState(null); // URL from Firebase or Local
+            const [logo, setLogo] = useState(null); 
+            const [logoUrl, setLogoUrl] = useState(null); 
             const [logoScale, setLogoScale] = useState(1.0);
             const [pageNumberPos, setPageNumberPos] = useState('right');
 
@@ -244,7 +219,6 @@
             const fileInputRef = useRef(null);
             const logoInputRef = useRef(null);
 
-            // --- 1. Init PDF Engine ---
             useEffect(() => {
                 const loadPdfLib = async () => {
                     if (window.PDFLib) { setPdfLibLoaded(true); return; }
@@ -258,10 +232,10 @@
                 loadPdfLib();
             }, []);
 
-            // --- 2. Firebase Auth & Data Listener ---
             useEffect(() => {
                 if (!auth) {
                     setSyncStatus('offline');
+                    setAuthError("Firebase not initialized.");
                     return;
                 }
 
@@ -269,8 +243,8 @@
                     if (currentUser) {
                         setUser(currentUser);
                         setSyncStatus('synced');
+                        setAuthError(null);
                         
-                        // Listen to Firestore
                         try {
                             const docRef = doc(db, "users", currentUser.uid, "projects", "active");
                             const unsubDoc = onSnapshot(docRef, (docSnap) => {
@@ -279,7 +253,6 @@
                                     if (data.projectMeta) setProjectMeta(data.projectMeta);
                                     if (data.files) {
                                         setFiles(prevFiles => {
-                                            // Prefer cloud data for structure
                                             return data.files;
                                         });
                                     }
@@ -299,15 +272,16 @@
                         try {
                             await signInAnonymously(auth);
                         } catch (error) {
-                            console.warn("Auth Error (Switching to Offline Mode):", error.code);
+                            console.warn("Auth Error:", error);
                             setSyncStatus('offline');
+                            setAuthError(error.code || error.message);
                         }
                     }
                 });
                 return () => unsubscribe();
             }, []);
 
-            // --- 3. Auto-Save Logic ---
+            // Auto-Save Logic
             useEffect(() => {
                 const saveData = async () => {
                     if (syncStatus === 'offline') return; 
@@ -341,9 +315,7 @@
                 return () => clearTimeout(timeout);
             }, [files, projectMeta, logoUrl, logoScale, pageNumberPos, user, syncStatus]);
 
-
-            // --- File Handling Functions ---
-
+            // File Handling
             const uploadFileToFirebase = async (file) => {
                 if (!user) return null;
                 const fileRef = ref(storage, `users/${user.uid}/files/${crypto.randomUUID()}-${file.name}`);
@@ -743,6 +715,12 @@
                                 <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
                             </div>
                             <div className="flex items-center gap-4">
+                                {authError && (
+                                    <div className="text-xs text-red-600 bg-red-50 border border-red-200 px-3 py-1.5 rounded-full flex items-center gap-2 animate-pulse">
+                                        <AlertTriangle className="w-4 h-4" />
+                                        <span>Connection Rejected: Enable Anonymous Auth in Console</span>
+                                    </div>
+                                )}
                                 <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${
                                     syncStatus === 'synced' ? 'bg-green-50 text-green-700 border-green-200' :
                                     syncStatus === 'syncing' ? 'bg-blue-50 text-blue-700 border-blue-200' :
