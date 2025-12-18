@@ -26,13 +26,14 @@
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
-            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database
+            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
+            FolderPlus, FolderOpen, MoreVertical, Layout
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS ---
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
         import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, listAll, getMetadata } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
 
         // --- ERROR BOUNDARY ---
@@ -142,10 +143,14 @@
             const [user, setUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState('connecting'); 
             const [authError, setAuthError] = useState(null);
+            
+            // --- Multi-Project State ---
+            const [projects, setProjects] = useState([]);
+            const [activeProjectId, setActiveProjectId] = useState(null);
+            
+            // --- Current Project Data ---
             const [files, setFiles] = useState([]);
             const [isProcessing, setIsProcessing] = useState(false);
-            
-            // Storage Stats State
             const [storageStats, setStorageStats] = useState({ usedBytes: 0, fileCount: 0 });
             const [refreshStats, setRefreshStats] = useState(0); 
 
@@ -157,8 +162,7 @@
                 description: "Structural analysis and design of primary framing members."
             });
 
-            // LOGO STATE
-            // Changed strategy: Store base64 string directly, not file blob
+            const [logo, setLogo] = useState(null); 
             const [logoUrl, setLogoUrl] = useState(null); 
             const [logoScale, setLogoScale] = useState("1.0"); 
             const [pageNumberPos, setPageNumberPos] = useState('right');
@@ -180,6 +184,7 @@
                 loadPdfLib();
             }, []);
 
+            // --- AUTH & PROJECTS LISTENER ---
             useEffect(() => {
                 if (!auth) {
                     setSyncStatus('offline');
@@ -193,85 +198,95 @@
                         setSyncStatus('synced');
                         setAuthError(null);
                         
-                        try {
-                            const docRef = doc(db, "users", currentUser.uid, "projects", "active");
-                            const unsubDoc = onSnapshot(docRef, (docSnap) => {
-                                if (docSnap.exists()) {
-                                    const data = docSnap.data();
-                                    if (data.projectMeta) setProjectMeta(data.projectMeta);
-                                    if (data.files) {
-                                        setFiles(currentFiles => {
-                                            const cloudFiles = data.files || [];
-                                            return cloudFiles.map(cf => {
-                                                const localMatch = currentFiles.find(lf => lf.id === cf.id);
-                                                return {
-                                                    ...cf,
-                                                    fileObj: localMatch?.fileObj || null 
-                                                };
-                                            });
-                                        });
-                                    }
-                                    if (data.logoUrl) setLogoUrl(data.logoUrl);
-                                    if (data.logoScale !== undefined) setLogoScale(data.logoScale.toString());
-                                    if (data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
-                                    setSyncStatus('synced');
-                                    setRefreshStats(prev => prev + 1); 
-                                }
-                            });
-                            return () => unsubDoc(); 
-                        } catch (e) {
-                            console.error("Firestore Error", e);
-                        }
+                        // 1. Listen for Projects List
+                        const projectsQuery = query(collection(db, "users", currentUser.uid, "projects"), orderBy("lastModified", "desc"));
+                        const unsubProjects = onSnapshot(projectsQuery, (snapshot) => {
+                            const projList = snapshot.docs.map(doc => ({
+                                id: doc.id,
+                                ...doc.data()
+                            }));
+                            setProjects(projList);
+                            
+                            // Initial Load: Select first project if none selected
+                            if (projList.length > 0 && !activeProjectId) {
+                                // Prefer "active" if it exists (legacy migration), otherwise most recent
+                                const legacy = projList.find(p => p.id === 'active');
+                                setActiveProjectId(legacy ? 'active' : projList[0].id);
+                            } else if (projList.length === 0) {
+                                // Create default project if absolutely none exist
+                                handleCreateProject(currentUser.uid, "New Project");
+                            }
+                        });
+                        return () => unsubProjects();
                     } else {
                         try {
                             await signInAnonymously(auth);
                         } catch (error) {
-                            console.warn("Auth Error:", error);
                             setSyncStatus('offline');
                             setAuthError(error.code || error.message);
                         }
                     }
                 });
                 return () => unsubscribe();
-            }, []);
+            }, []); // Run once on mount
+
+            // --- ACTIVE PROJECT DATA LISTENER ---
+            useEffect(() => {
+                if (!user || !activeProjectId) return;
+
+                const docRef = doc(db, "users", user.uid, "projects", activeProjectId);
+                const unsubDoc = onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.projectMeta) setProjectMeta(data.projectMeta);
+                        if (data.files) {
+                            setFiles(currentFiles => {
+                                const cloudFiles = data.files || [];
+                                return cloudFiles.map(cf => {
+                                    const localMatch = currentFiles.find(lf => lf.id === cf.id);
+                                    return {
+                                        ...cf,
+                                        fileObj: localMatch?.fileObj || null 
+                                    };
+                                });
+                            });
+                        }
+                        if (data.logoUrl) setLogoUrl(data.logoUrl);
+                        if (data.logoScale !== undefined) setLogoScale(data.logoScale.toString());
+                        if (data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
+                        setSyncStatus('synced');
+                        setRefreshStats(prev => prev + 1); 
+                    }
+                });
+                return () => unsubDoc();
+            }, [user, activeProjectId]);
 
             // --- Storage Usage Calculator ---
             useEffect(() => {
                 if (!user || syncStatus === 'offline') return;
-
                 const calculateUsage = async () => {
                     try {
                         const filesRef = ref(storage, `users/${user.uid}/files`);
                         const listResult = await listAll(filesRef);
-                        
                         let totalBytes = 0;
                         let count = 0;
-
                         const metadataPromises = listResult.items.map(itemRef => getMetadata(itemRef));
                         const metaResults = await Promise.all(metadataPromises);
-
-                        metaResults.forEach(meta => {
-                            totalBytes += meta.size;
-                            count++;
-                        });
-
+                        metaResults.forEach(meta => { totalBytes += meta.size; count++; });
                         setStorageStats({ usedBytes: totalBytes, fileCount: count });
-                    } catch (e) {
-                        console.error("Failed to calc storage stats", e);
-                    }
+                    } catch (e) { console.error("Failed to calc storage stats", e); }
                 };
-
                 calculateUsage();
             }, [user, refreshStats, syncStatus]);
 
-            // Auto-Save
+            // --- Auto-Save (To Active Project) ---
             useEffect(() => {
                 const saveData = async () => {
                     if (syncStatus === 'offline') return; 
-                    if (user && syncStatus !== 'connecting' && syncStatus !== 'error') {
+                    if (user && activeProjectId && syncStatus !== 'connecting' && syncStatus !== 'error') {
                         setSyncStatus('syncing');
                         try {
-                            const docRef = doc(db, "users", user.uid, "projects", "active");
+                            const docRef = doc(db, "users", user.uid, "projects", activeProjectId);
                             const cleanFiles = files.map(f => {
                                 const { fileObj, ...rest } = f; 
                                 return rest;
@@ -279,7 +294,7 @@
                             await setDoc(docRef, {
                                 projectMeta,
                                 files: cleanFiles,
-                                logoUrl, // Saves Base64 string directly
+                                logoUrl,
                                 logoScale: parseFloat(logoScale) || 1.0,
                                 pageNumberPos,
                                 lastModified: new Date().toISOString()
@@ -293,7 +308,53 @@
                 };
                 const timeout = setTimeout(saveData, 2000);
                 return () => clearTimeout(timeout);
-            }, [files, projectMeta, logoUrl, logoScale, pageNumberPos, user, syncStatus]);
+            }, [files, projectMeta, logoUrl, logoScale, pageNumberPos, user, syncStatus, activeProjectId]);
+
+
+            // --- PROJECT ACTIONS ---
+            const handleCreateProject = async (uid = user?.uid, title = "New Calculation Package") => {
+                if (!uid) return;
+                const newProject = {
+                    projectMeta: { ...projectMeta, title: title, number: "NEW" },
+                    files: [],
+                    logoUrl: null,
+                    logoScale: 1.0,
+                    pageNumberPos: 'right',
+                    lastModified: new Date().toISOString()
+                };
+                try {
+                    const docRef = await addDoc(collection(db, "users", uid, "projects"), newProject);
+                    setActiveProjectId(docRef.id);
+                } catch(e) { console.error("Create project failed", e); }
+            };
+
+            const handleDeleteProject = async (projectId, e) => {
+                e.stopPropagation();
+                if (!confirm("Are you sure you want to delete this project? ALL ASSOCIATED FILES WILL BE PERMANENTLY DELETED.")) return;
+                
+                const projectToDelete = projects.find(p => p.id === projectId);
+                if (!projectToDelete) return;
+
+                try {
+                    // 1. Delete associated files from Storage
+                    if (projectToDelete.files && projectToDelete.files.length > 0) {
+                        const filesToDelete = projectToDelete.files
+                            .filter(f => f.downloadURL) // Only cloud files
+                            .map(f => deleteFromCloud(f.downloadURL));
+                        
+                        await Promise.all(filesToDelete);
+                    }
+
+                    // 2. Delete the Project Document
+                    await deleteDoc(doc(db, "users", user.uid, "projects", projectId));
+                    
+                    // 3. Switch active project if current was deleted
+                    if (projectId === activeProjectId) {
+                        const remaining = projects.filter(p => p.id !== projectId);
+                        setActiveProjectId(remaining.length > 0 ? remaining[0].id : null);
+                    }
+                } catch(e) { console.error("Delete failed", e); }
+            };
 
             // --- Handlers ---
 
@@ -303,6 +364,17 @@
                 await uploadBytes(fileRef, file);
                 setRefreshStats(prev => prev + 1); 
                 return await getDownloadURL(fileRef);
+            };
+
+            const deleteFromCloud = async (url) => {
+                if (!user || !url) return;
+                try {
+                    if (url.includes('firebasestorage.googleapis.com')) {
+                        const fileRef = ref(storage, url);
+                        await deleteObject(fileRef);
+                        setRefreshStats(prev => prev + 1);
+                    }
+                } catch (e) { console.warn("Cloud deletion failed (may already be gone)", e); }
             };
 
             const handleFileUpload = async (e) => {
@@ -341,12 +413,11 @@
                 if (syncStatus !== 'offline') setSyncStatus('synced');
             };
 
-            // MODIFIED: Base64 Logo Handler
             const handleLogoUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
 
-                if (file.size > 500 * 1024) { // 500KB limit
+                if (file.size > 500 * 1024) { 
                     alert("Logo is too large. Please use a file smaller than 500KB.");
                     return;
                 }
@@ -354,7 +425,7 @@
                 const reader = new FileReader();
                 reader.onloadend = () => {
                     const base64 = reader.result;
-                    setLogoUrl(base64); // Set state to Base64 string
+                    setLogoUrl(base64); 
                 };
                 reader.readAsDataURL(file);
             };
@@ -372,10 +443,15 @@
                     pageCount = pdf.getPageCount();
                 } catch(err) { console.error(err); }
 
+                const oldFile = files.find(f => f.id === id);
+                const oldUrl = oldFile ? oldFile.downloadURL : null;
+
                 let url = null;
                 if (user && syncStatus !== 'offline') {
                     try { url = await uploadFileToFirebase(file); } catch(e) {}
                 }
+
+                if (url && oldUrl) await deleteFromCloud(oldUrl);
 
                 setFiles(prev => prev.map(f => {
                     if (f.id !== id) return f;
@@ -408,7 +484,11 @@
                 handleReplaceFile(e, id); 
                 setFiles(prev => prev.map(f => f.id === id ? { ...f, isPlaceholder: false } : f));
             };
-            const removeFile = (id) => setFiles(files.filter(f => f.id !== id));
+            const removeFile = async (id) => {
+                const file = files.find(f => f.id === id);
+                setFiles(files.filter(f => f.id !== id));
+                if (file && file.downloadURL) await deleteFromCloud(file.downloadURL);
+            };
             const removeLogo = () => { setLogoUrl(null); if (logoInputRef.current) logoInputRef.current.value = ""; };
             const updateFileField = (id, field, value) => setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
             const updateMeta = (field, value) => setProjectMeta(prev => ({ ...prev, [field]: value }));
@@ -680,99 +760,134 @@
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                            <div className="lg:col-span-8 space-y-6">
-                                {/* Project Metadata */}
-                                <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                                        {/* Logo Uploader */}
-                                        <div className="md:col-span-3 flex flex-col items-center justify-center">
-                                            <div className="w-full aspect-square bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors relative group" onClick={() => logoInputRef.current?.click()}>
-                                                {logoUrl ? <><img src={logoUrl} className="w-full h-full object-contain p-2" /><button onClick={(e) => {e.stopPropagation(); removeLogo();}} className="absolute top-1 right-1 p-1 bg-white rounded-full text-slate-500 hover:text-red-500 shadow-sm opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button></> : <div className="text-center p-2"><ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-1" /><span className="text-[10px] text-slate-400 font-medium uppercase">Upload Logo</span></div>}
-                                                <input type="file" accept="image/png, image/jpeg" className="hidden" ref={logoInputRef} onChange={handleLogoUpload} />
-                                            </div>
-                                            <div className="mt-2 flex items-center justify-center gap-2">
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase">Scale:</label>
-                                                <input type="number" min="0.1" max="5.0" step="0.01" value={logoScale} onChange={(e) => setLogoScale(e.target.value)} className="w-16 text-xs border border-slate-300 rounded px-1 py-0.5 text-center" />
-                                            </div>
-                                        </div>
-                                        {/* Fields */}
-                                        <div className="md:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Project Name</label><input type="text" value={projectMeta.title} onChange={(e) => updateMeta('title', e.target.value)} className="w-full px-3 py-2 text-base font-medium border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
-                                            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Hash className="w-3 h-3" /> Project Number</label><input type="text" value={projectMeta.number} onChange={(e) => updateMeta('number', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
-                                            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Date</label><input type="date" value={projectMeta.date} onChange={(e) => updateMeta('date', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
-                                            <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><User className="w-3 h-3" /> Client Name</label><input type="text" value={projectMeta.client} onChange={(e) => updateMeta('client', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
-                                            <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><AlignLeft className="w-3 h-3" /> Description</label><textarea value={projectMeta.description} onChange={(e) => updateMeta('description', e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none resize-none" /></div>
-                                        </div>
-                                    </div>
+                        <div className="grid grid-cols-12 gap-8">
+                            {/* Project Sidebar */}
+                            <div className="col-span-12 md:col-span-3 lg:col-span-2 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[calc(100vh-150px)] sticky top-6">
+                                <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+                                    <h2 className="font-semibold text-slate-700 flex items-center gap-2"><Layout className="w-4 h-4" /> Projects</h2>
+                                    <button onClick={() => handleCreateProject(user?.uid)} className="p-1 hover:bg-white rounded shadow-sm text-blue-600 transition-colors"><FolderPlus className="w-4 h-4" /></button>
                                 </div>
-
-                                {/* Drag & Drop */}
-                                <div className="flex gap-4">
-                                    <div className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                                        <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                                        <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" /><p className="text-lg font-medium text-slate-700">Drop PDFs here to Upload</p><p className="text-sm text-slate-500">{syncStatus === 'offline' ? 'Local memory only (Offline Mode)' : 'Automatically saved to Cloud'}</p>
-                                    </div>
-                                    <div className="flex-none w-48 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group" onClick={handleAddPlaceholder}>
-                                        <FileQuestion className="w-8 h-8 text-slate-400 group-hover:text-emerald-500 mb-2 transition-colors" /><p className="text-sm font-medium text-slate-600 group-hover:text-emerald-600">Add Placeholder</p>
-                                    </div>
-                                </div>
-
-                                {/* File List */}
-                                <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-                                    <ul className="divide-y divide-slate-100">
-                                        {numberedFiles.map((file, index) => (
-                                            <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50'}`}>
-                                                <div className="flex flex-col items-center justify-center gap-2 mr-2">
-                                                    <div className="flex flex-col"><button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button><button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button></div>
-                                                    <div className="flex gap-1"><button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowLeft className="w-3 h-3" /></button><button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowRight className="w-3 h-3" /></button></div>
+                                <div className="overflow-y-auto flex-1 p-2 space-y-1">
+                                    {projects.map(p => (
+                                        <div 
+                                            key={p.id} 
+                                            onClick={() => setActiveProjectId(p.id)}
+                                            className={`p-3 rounded-md text-sm cursor-pointer transition-all flex justify-between group ${activeProjectId === p.id ? 'bg-blue-50 border-blue-200 border text-blue-700' : 'hover:bg-slate-50 text-slate-600 border border-transparent'}`}
+                                        >
+                                            <div className="truncate pr-2">
+                                                <div className="font-medium truncate">
+                                                    {p.id === activeProjectId ? (projectMeta.title || "Untitled Project") : (p.projectMeta?.title || "Untitled Project")}
                                                 </div>
-                                                <div className="flex flex-col justify-start pt-2 w-10 shrink-0"><span className="font-mono font-bold text-slate-500 text-lg">{file.sectionLabel}</span></div>
-                                                <div className={`flex-1 space-y-3 transition-all ${getIndent(file.depth)}`}>
-                                                    <div className="flex items-center justify-between">
-                                                        <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className="w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" />
-                                                        {file.isPlaceholder && <span className="ml-2 text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-yellow-200">Placeholder</span>}
-                                                    </div>
-                                                    <input type="text" value={file.sectionSubtitle} onChange={(e) => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-sm text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Subtitle" />
-                                                    <div className="grid grid-cols-12 gap-2 bg-slate-50 p-2 rounded border border-slate-100">
-                                                        <div className="col-span-3"><input type="text" value={file.calcsBy} onChange={(e) => updateFileField(file.id, 'calcsBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="By" /></div>
-                                                        <div className="col-span-3"><input type="text" value={file.checkedBy} onChange={(e) => updateFileField(file.id, 'checkedBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="Chk" /></div>
-                                                        <div className="col-span-2"><input type="text" value={file.revision} onChange={(e) => updateFileField(file.id, 'revision', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-center" placeholder="Rev" /></div>
-                                                        <div className="col-span-4 text-[10px] text-slate-500 pt-1.5 px-1">{file.uploadDate}</div>
-                                                    </div>
-                                                    <div className="flex items-center justify-between text-xs text-slate-400">
-                                                        <div className="flex items-center gap-2"><FileText className="w-3 h-3" /><span className="truncate max-w-[200px]">{file.name}</span><span className="text-slate-300">•</span>{file.isPlaceholder ? (<input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />) : (<span>{file.pageCount} Pages</span>)}</div>
-                                                        <label className="flex items-center gap-1 cursor-pointer text-blue-500 hover:text-blue-700"><RefreshCw className="w-3 h-3" /> {file.isPlaceholder ? "Upload" : "Replace"}<input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} /></label>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-start pt-1"><button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 rounded"><Trash2 className="w-4 h-4" /></button></div>
-                                            </li>
-                                        ))}
-                                    </ul>
+                                                <div className="text-[10px] opacity-70">{new Date(p.lastModified).toLocaleDateString()}</div>
+                                            </div>
+                                            <button 
+                                                onClick={(e) => handleDeleteProject(p.id, e)}
+                                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 rounded"
+                                            >
+                                                <Trash2 className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {projects.length === 0 && <div className="p-4 text-center text-xs text-slate-400">No projects found. Create one to get started.</div>}
                                 </div>
                             </div>
 
-                            <div className="lg:col-span-4 space-y-6">
-                                <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 sticky top-6">
-                                    <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Output Configuration</h3>
-                                    <div className="space-y-4 mb-6">
-                                        <div className="flex items-center justify-between text-sm py-2 border-b border-slate-50"><span className="text-slate-600">Total Sections</span><span className="font-mono font-medium bg-slate-100 px-2 py-0.5 rounded">{files.length}</span></div>
-                                        <div className="space-y-2 pt-2">
-                                            <div className="flex items-center gap-2"><input type="checkbox" checked disabled className="rounded text-blue-600" /><label className="text-sm text-slate-700">TOC (Auto)</label></div>
-                                            <div className="flex items-center gap-2"><input type="checkbox" defaultChecked className="rounded text-blue-600" /><label className="text-sm text-slate-700">Section Dividers</label></div>
-                                        </div>
-                                        <div className="space-y-2 pt-4 border-t border-slate-100">
-                                            <label className="text-xs font-semibold text-slate-500 uppercase">Page Numbering</label>
-                                            <div className="flex bg-slate-100 p-1 rounded-md">
-                                                <button onClick={() => setPageNumberPos('left')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='left'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignLeft className="w-4 h-4 mx-auto" /></button>
-                                                <button onClick={() => setPageNumberPos('center')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='center'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignCenter className="w-4 h-4 mx-auto" /></button>
-                                                <button onClick={() => setPageNumberPos('right')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='right'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignRight className="w-4 h-4 mx-auto" /></button>
+                            {/* Main Content Area */}
+                            <div className="col-span-12 md:col-span-9 lg:col-span-10 grid grid-cols-1 lg:grid-cols-12 gap-8">
+                                <div className="lg:col-span-8 space-y-6">
+                                    {/* Project Metadata */}
+                                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                            {/* Logo Uploader */}
+                                            <div className="md:col-span-3 flex flex-col items-center justify-center">
+                                                <div className="w-full aspect-square bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors relative group" onClick={() => logoInputRef.current?.click()}>
+                                                    {logoUrl ? <><img src={logoUrl} className="w-full h-full object-contain p-2" /><button onClick={(e) => {e.stopPropagation(); removeLogo();}} className="absolute top-1 right-1 p-1 bg-white rounded-full text-slate-500 hover:text-red-500 shadow-sm opacity-0 group-hover:opacity-100"><X className="w-3 h-3" /></button></> : <div className="text-center p-2"><ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-1" /><span className="text-[10px] text-slate-400 font-medium uppercase">Upload Logo</span></div>}
+                                                    <input type="file" accept="image/png, image/jpeg" className="hidden" ref={logoInputRef} onChange={handleLogoUpload} />
+                                                </div>
+                                                <div className="mt-2 flex items-center justify-center gap-2">
+                                                    <label className="text-[10px] font-bold text-slate-400 uppercase">Scale:</label>
+                                                    <input type="number" min="0.1" max="5.0" step="0.01" value={logoScale} onChange={(e) => setLogoScale(e.target.value)} className="w-16 text-xs border border-slate-300 rounded px-1 py-0.5 text-center" />
+                                                </div>
+                                            </div>
+                                            {/* Fields */}
+                                            <div className="md:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Project Name</label><input type="text" value={projectMeta.title} onChange={(e) => updateMeta('title', e.target.value)} className="w-full px-3 py-2 text-base font-medium border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
+                                                <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Hash className="w-3 h-3" /> Project Number</label><input type="text" value={projectMeta.number} onChange={(e) => updateMeta('number', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
+                                                <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Date</label><input type="date" value={projectMeta.date} onChange={(e) => updateMeta('date', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
+                                                <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><User className="w-3 h-3" /> Client Name</label><input type="text" value={projectMeta.client} onChange={(e) => updateMeta('client', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
+                                                <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><AlignLeft className="w-3 h-3" /> Description</label><textarea value={projectMeta.description} onChange={(e) => updateMeta('description', e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none resize-none" /></div>
                                             </div>
                                         </div>
                                     </div>
-                                    <button onClick={generateBinder} disabled={files.length === 0 || isProcessing} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                                        {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" /> Compiling...</> : <><Save className="w-5 h-5" /> Download Merged PDF</>}
-                                    </button>
+
+                                    {/* Drag & Drop */}
+                                    <div className="flex gap-4">
+                                        <div className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                                            <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+                                            <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" /><p className="text-lg font-medium text-slate-700">Drop PDFs here to Upload</p><p className="text-sm text-slate-500">{syncStatus === 'offline' ? 'Local memory only (Offline Mode)' : 'Automatically saved to Cloud'}</p>
+                                        </div>
+                                        <div className="flex-none w-48 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group" onClick={handleAddPlaceholder}>
+                                            <FileQuestion className="w-8 h-8 text-slate-400 group-hover:text-emerald-500 mb-2 transition-colors" /><p className="text-sm font-medium text-slate-600 group-hover:text-emerald-600">Add Placeholder</p>
+                                        </div>
+                                    </div>
+
+                                    {/* File List */}
+                                    <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+                                        <ul className="divide-y divide-slate-100">
+                                            {numberedFiles.map((file, index) => (
+                                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50'}`}>
+                                                    <div className="flex flex-col items-center justify-center gap-2 mr-2">
+                                                        <div className="flex flex-col"><button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button><button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button></div>
+                                                        <div className="flex gap-1"><button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowLeft className="w-3 h-3" /></button><button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowRight className="w-3 h-3" /></button></div>
+                                                    </div>
+                                                    <div className="flex flex-col justify-start pt-2 w-10 shrink-0"><span className="font-mono font-bold text-slate-500 text-lg">{file.sectionLabel}</span></div>
+                                                    <div className={`flex-1 space-y-3 transition-all ${getIndent(file.depth)}`}>
+                                                        <div className="flex items-center justify-between">
+                                                            <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className="w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" />
+                                                            {file.isPlaceholder && <span className="ml-2 text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-yellow-200">Placeholder</span>}
+                                                        </div>
+                                                        <input type="text" value={file.sectionSubtitle} onChange={(e) => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-sm text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Subtitle" />
+                                                        <div className="grid grid-cols-12 gap-2 bg-slate-50 p-2 rounded border border-slate-100">
+                                                            <div className="col-span-3"><input type="text" value={file.calcsBy} onChange={(e) => updateFileField(file.id, 'calcsBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="By" /></div>
+                                                            <div className="col-span-3"><input type="text" value={file.checkedBy} onChange={(e) => updateFileField(file.id, 'checkedBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="Chk" /></div>
+                                                            <div className="col-span-2"><input type="text" value={file.revision} onChange={(e) => updateFileField(file.id, 'revision', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-center" placeholder="Rev" /></div>
+                                                            <div className="col-span-4 text-[10px] text-slate-500 pt-1.5 px-1">{file.uploadDate}</div>
+                                                        </div>
+                                                        <div className="flex items-center justify-between text-xs text-slate-400">
+                                                            <div className="flex items-center gap-2"><FileText className="w-3 h-3" /><span className="truncate max-w-[200px]">{file.name}</span><span className="text-slate-300">•</span>{file.isPlaceholder ? (<input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />) : (<span>{file.pageCount} Pages</span>)}</div>
+                                                            <label className="flex items-center gap-1 cursor-pointer text-blue-500 hover:text-blue-700"><RefreshCw className="w-3 h-3" /> {file.isPlaceholder ? "Upload" : "Replace"}<input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} /></label>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-start pt-1"><button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 rounded"><Trash2 className="w-4 h-4" /></button></div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+
+                                {/* Right Panel */}
+                                <div className="lg:col-span-4 space-y-6">
+                                    <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 sticky top-6">
+                                        <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Output Configuration</h3>
+                                        <div className="space-y-4 mb-6">
+                                            <div className="flex items-center justify-between text-sm py-2 border-b border-slate-50"><span className="text-slate-600">Total Sections</span><span className="font-mono font-medium bg-slate-100 px-2 py-0.5 rounded">{files.length}</span></div>
+                                            <div className="space-y-2 pt-2">
+                                                <div className="flex items-center gap-2"><input type="checkbox" checked disabled className="rounded text-blue-600" /><label className="text-sm text-slate-700">TOC (Auto)</label></div>
+                                                <div className="flex items-center gap-2"><input type="checkbox" defaultChecked className="rounded text-blue-600" /><label className="text-sm text-slate-700">Section Dividers</label></div>
+                                            </div>
+                                            <div className="space-y-2 pt-4 border-t border-slate-100">
+                                                <label className="text-xs font-semibold text-slate-500 uppercase">Page Numbering</label>
+                                                <div className="flex bg-slate-100 p-1 rounded-md">
+                                                    <button onClick={() => setPageNumberPos('left')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='left'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignLeft className="w-4 h-4 mx-auto" /></button>
+                                                    <button onClick={() => setPageNumberPos('center')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='center'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignCenter className="w-4 h-4 mx-auto" /></button>
+                                                    <button onClick={() => setPageNumberPos('right')} className={`flex-1 py-1.5 rounded ${pageNumberPos==='right'?'bg-white shadow text-blue-600':'text-slate-400'}`}><AlignRight className="w-4 h-4 mx-auto" /></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button onClick={generateBinder} disabled={files.length === 0 || isProcessing} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                                            {isProcessing ? <><Loader2 className="w-5 h-5 animate-spin" /> Compiling...</> : <><Save className="w-5 h-5" /> Download Merged PDF</>}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
