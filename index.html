@@ -26,7 +26,7 @@
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
-            Image as ImageIcon, X, FileQuestion, RefreshCw
+            Image as ImageIcon, X, FileQuestion, RefreshCw, Download, UploadCloud, AlertTriangle
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         const CalcBinder = () => {
@@ -51,6 +51,7 @@
             const [pdfLibLoaded, setPdfLibLoaded] = useState(false);
             const fileInputRef = useRef(null);
             const logoInputRef = useRef(null);
+            const jsonInputRef = useRef(null); // Ref for JSON import
 
             // --- 1. Load PDF-Lib Dynamically ---
             useEffect(() => {
@@ -82,21 +83,25 @@
                 let changed = false;
 
                 for (let i = 0; i < updatedFiles.length; i++) {
-                    if (!updatedFiles[i].isPlaceholder && updatedFiles[i].pageCount === 'Calc...') {
-                    try {
-                        const arrayBuffer = await updatedFiles[i].file.arrayBuffer();
-                        // ignoreEncryption: true allows reading files with passwords if they don't block opening,
-                        // or files with minor metadata corruption issues.
-                        const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-                        updatedFiles[i].pageCount = pdf.getPageCount();
-                        updatedFiles[i].rawPages = pdf.getPageCount();
-                        changed = true;
-                    } catch (e) {
-                        console.error("Could not count pages for", updatedFiles[i].name, e);
-                        updatedFiles[i].pageCount = 'Err';
+                    // Only count if it's not a placeholder AND has a file object AND hasn't been counted yet
+                    if (!updatedFiles[i].isPlaceholder && updatedFiles[i].file && updatedFiles[i].pageCount === 'Calc...') {
+                        try {
+                            const arrayBuffer = await updatedFiles[i].file.arrayBuffer();
+                            const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+                            updatedFiles[i].pageCount = pdf.getPageCount();
+                            updatedFiles[i].rawPages = pdf.getPageCount();
+                            changed = true;
+                        } catch (e) {
+                            console.error("Could not count pages for", updatedFiles[i].name, e);
+                            updatedFiles[i].pageCount = 'Err';
+                            updatedFiles[i].rawPages = 0;
+                            changed = true;
+                        }
+                    } else if (!updatedFiles[i].isPlaceholder && !updatedFiles[i].file && updatedFiles[i].pageCount !== 'Missing') {
+                        // Handle imported files that are missing binaries
+                        updatedFiles[i].pageCount = 'Missing';
                         updatedFiles[i].rawPages = 0;
                         changed = true;
-                    }
                     }
                 }
 
@@ -157,7 +162,6 @@
             const handleReplacePlaceholder = (e, id) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
                 setFiles(prev => prev.map(f => {
@@ -170,7 +174,7 @@
                         uploadDate: currentDate,
                         isPlaceholder: false,
                         size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                        pageCount: 'Calc...', // Trigger recalc
+                        pageCount: 'Calc...', 
                         rawPages: 0
                     };
                 }));
@@ -179,22 +183,96 @@
             const handleReplaceFile = (e, id) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
                 setFiles(prev => prev.map(f => {
                     if (f.id !== id) return f;
                     return {
                         ...f,
-                        file: file,
+                        file: file, // Re-attach the binary
                         name: file.name,
                         uploadDate: currentDate,
                         size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                        pageCount: 'Calc...', // Trigger recalc
+                        pageCount: 'Calc...', 
                         rawPages: 0
                     };
                 }));
             };
+
+            // --- JSON Export/Import Logic ---
+
+            const handleExportJSON = () => {
+                const data = {
+                    version: "1.0",
+                    timestamp: new Date().toISOString(),
+                    projectMeta,
+                    logoPreview, // Saving base64 string
+                    logoScale,
+                    pageNumberPos,
+                    files: files.map(f => ({
+                        ...f,
+                        file: null, // IMPORTANT: Remove binary blob
+                        pageCount: f.isPlaceholder ? f.pageCount : 'Calc...', // Reset page count status for re-calc on import
+                    }))
+                };
+
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `BinderConfig_${projectMeta.number || 'Draft'}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleImportJSON = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        
+                        // Restore Project Meta
+                        if(data.projectMeta) setProjectMeta(data.projectMeta);
+                        
+                        // Restore Logo (Base64)
+                        if(data.logoPreview) {
+                            setLogoPreview(data.logoPreview);
+                            // Note: We can't easily recreate the File object for 'logo', 
+                            // but we can assume logoPreview is sufficient for PDF generation logic (which uses embedding)
+                            // or create a Blob from base64 if strictly needed.
+                            fetch(data.logoPreview)
+                                .then(res => res.blob())
+                                .then(blob => setLogo(blob));
+                        }
+                        if(data.logoScale) setLogoScale(data.logoScale);
+                        if(data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
+
+                        // Restore Files
+                        if(data.files && Array.isArray(data.files)) {
+                            const restoredFiles = data.files.map(f => ({
+                                ...f,
+                                id: crypto.randomUUID(), // New IDs to avoid conflicts
+                                file: null, // Explicitly null
+                                pageCount: f.isPlaceholder ? f.pageCount : 'Missing', // Flag as missing
+                            }));
+                            setFiles(restoredFiles);
+                        }
+                        
+                        alert("Configuration loaded successfully. Please re-link missing PDF files.");
+                    } catch (err) {
+                        console.error("Import failed", err);
+                        alert("Failed to parse JSON file.");
+                    }
+                };
+                reader.readAsText(file);
+                // Reset input
+                e.target.value = '';
+            };
+
 
             const updatePlaceholderPages = (id, val) => {
                 const count = parseInt(val) || 1;
@@ -283,6 +361,11 @@
                 });
             }, [files]);
 
+            // --- Check for Missing Files ---
+            const hasMissingFiles = useMemo(() => {
+                return files.some(f => !f.isPlaceholder && !f.file);
+            }, [files]);
+
             // --- Helper: Text Drawing with Wrapping ---
             const drawWrappedText = (page, text, y, size, font, rgb, color = [0,0,0], maxWidth, align = 'center') => {
                 if (!text) return;
@@ -330,8 +413,12 @@
             // --- PDF Generation Logic ---
             const generateBinder = async () => {
                 if (!pdfLibLoaded) {
-                alert("PDF Engine is still initializing. Please wait a moment and try again.");
-                return;
+                    alert("PDF Engine is still initializing. Please wait a moment and try again.");
+                    return;
+                }
+                if (hasMissingFiles) {
+                    alert("Cannot generate PDF: Some files are missing sources. Please link PDF files to the highlighted sections.");
+                    return;
                 }
                 
                 setIsProcessing(true);
@@ -346,14 +433,27 @@
 
                 // --- Prepare Logo ---
                 let embeddedLogo = null;
-                if (logo) {
+                if (logo || logoPreview) {
                     try {
-                    const logoBytes = await logo.arrayBuffer();
-                    const isPng = logo.type === 'image/png';
-                    embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes);
+                        let logoBytes;
+                        let isPng = false;
+                        
+                        if (logo) {
+                            logoBytes = await logo.arrayBuffer();
+                            isPng = logo.type === 'image/png';
+                        } else if (logoPreview) {
+                            // Handle restored session where only base64 exists
+                            const fetchRes = await fetch(logoPreview);
+                            logoBytes = await fetchRes.arrayBuffer();
+                            isPng = logoPreview.startsWith('data:image/png');
+                        }
+
+                        if(logoBytes) {
+                            embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes);
+                        }
                     } catch (e) {
-                    console.error("Error embedding logo", e);
-                    alert("Could not process logo image. Proceeding without logo.");
+                        console.error("Error embedding logo", e);
+                        alert("Could not process logo image. Proceeding without logo.");
                     }
                 }
 
@@ -557,10 +657,29 @@
                         </h1>
                         <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-4">
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={handleExportJSON}
+                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors"
+                                title="Export Configuration to JSON"
+                            >
+                                <Download className="w-4 h-4" /> Export
+                            </button>
+                            <label className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors cursor-pointer" title="Import Configuration">
+                                <UploadCloud className="w-4 h-4" /> Import
+                                <input 
+                                    type="file" 
+                                    accept=".json" 
+                                    ref={jsonInputRef} 
+                                    onChange={handleImportJSON} 
+                                    className="hidden" 
+                                />
+                            </label>
+                        </div>
                         <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${pdfLibLoaded ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                        <div className={`w-2 h-2 rounded-full ${pdfLibLoaded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`}></div>
-                        {pdfLibLoaded ? 'Engine Ready' : 'Initializing Engine...'}
+                            <div className={`w-2 h-2 rounded-full ${pdfLibLoaded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+                            {pdfLibLoaded ? 'Engine Ready' : 'Initializing...'}
                         </div>
                     </div>
                     </div>
@@ -685,8 +804,15 @@
                             <div className="p-12 text-center text-slate-400 italic">No files staged. Upload PDFs to begin.</div>
                         ) : (
                             <ul className="divide-y divide-slate-100">
-                            {numberedFiles.map((file, index) => (
-                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isPlaceholder ? 'bg-yellow-50/50 hover:bg-yellow-50' : 'hover:bg-slate-50'}`}>
+                            {numberedFiles.map((file, index) => {
+                                // Determine state classes based on missing/placeholder
+                                const isMissing = !file.isPlaceholder && !file.file;
+                                let rowClass = "hover:bg-slate-50";
+                                if (file.isPlaceholder) rowClass = "bg-yellow-50/50 hover:bg-yellow-50";
+                                if (isMissing) rowClass = "bg-red-50/50 hover:bg-red-50 border-l-4 border-l-red-400";
+
+                                return (
+                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${rowClass}`}>
                                 
                                 {/* Controls Area */}
                                 <div className="flex flex-col items-center justify-center gap-2 mr-2">
@@ -712,6 +838,7 @@
                                     <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
                                         <span>{file.depth === 0 ? "Section Title" : file.depth === 1 ? "Subsection Title" : "Item Title"}</span>
                                         {file.isPlaceholder && <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-yellow-200">Placeholder</span>}
+                                        {isMissing && <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-red-200 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Missing Source</span>}
                                     </label>
                                     <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className={`w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none ${file.depth === 0 ? 'text-lg' : 'text-base'}`} />
                                     </div>
@@ -762,16 +889,24 @@
                                     ) : (
                                         <div className="flex items-center justify-between pt-1">
                                             <div className="flex items-center gap-2 text-xs text-slate-400">
-                                                <FileText className="w-3 h-3" />
-                                                <span className="truncate max-w-[200px]" title={file.name}>{file.name}</span>
+                                                <FileText className={`w-3 h-3 ${isMissing ? 'text-red-500' : ''}`} />
+                                                <span className={`truncate max-w-[200px] ${isMissing ? 'text-red-600 font-medium' : ''}`} title={file.name}>
+                                                    {file.name}
+                                                </span>
                                                 <span>•</span>
-                                                <span className={`${file.pageCount === 'Err' ? 'text-red-500' : 'text-slate-500'}`}>
-                                                    {file.pageCount === 'Calc...' ? 'Counting...' : `${file.pageCount} Pages`}
+                                                <span className={`${(file.pageCount === 'Err' || isMissing) ? 'text-red-500' : 'text-slate-500'}`}>
+                                                    {isMissing ? 'Source Required' : (file.pageCount === 'Calc...' ? 'Counting...' : `${file.pageCount} Pages`)}
                                                 </span>
                                             </div>
-                                            <label className="flex items-center gap-1 cursor-pointer text-[10px] text-blue-500 hover:text-blue-700 hover:bg-blue-50 px-1.5 py-0.5 rounded transition-colors" title="Replace PDF File">
+                                            
+                                            {/* Unified Replace/Link Action */}
+                                            <label className={`flex items-center gap-1 cursor-pointer text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                                                isMissing 
+                                                ? 'bg-red-100 text-red-600 hover:bg-red-200 border border-red-200' 
+                                                : 'text-blue-500 hover:text-blue-700 hover:bg-blue-50'
+                                            }`} title={isMissing ? "Link Original File" : "Replace PDF File"}>
                                                 <RefreshCw className="w-3 h-3" />
-                                                <span>Replace</span>
+                                                <span className="font-medium">{isMissing ? "Link PDF" : "Replace"}</span>
                                                 <input type="file" accept=".pdf" className="hidden" onChange={(e) => handleReplaceFile(e, file.id)} />
                                             </label>
                                         </div>
@@ -810,7 +945,7 @@
                                 </div>
 
                                 </li>
-                            ))}
+                            )})}
                             </ul>
                         )}
                         </div>
@@ -862,7 +997,7 @@
                             </div>
                         </div>
 
-                        <button onClick={generateBinder} disabled={files.length === 0 || isProcessing || !pdfLibLoaded} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing || !pdfLibLoaded ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:transform active:scale-95'}`}>
+                        <button onClick={generateBinder} disabled={files.length === 0 || isProcessing || !pdfLibLoaded || hasMissingFiles} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing || !pdfLibLoaded || hasMissingFiles ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:transform active:scale-95'}`}>
                             {isProcessing ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Compiling Binder...</> : <><Save className="w-5 h-5" /> Download Merged PDF</>}
                         </button>
                         </div>
