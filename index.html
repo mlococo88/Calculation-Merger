@@ -1,0 +1,670 @@
+import React, { useState, useRef, useMemo, useEffect } from 'react';
+import { Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, Calendar, User, Hash, AlignLeft, CheckSquare, Clock, Image as ImageIcon, X } from 'lucide-react';
+
+const CalcBinder = () => {
+  const [files, setFiles] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // Expanded Project Metadata State
+  const [projectMeta, setProjectMeta] = useState({
+    title: "Structural Calculation Package",
+    number: "2025-001",
+    client: "Client Name",
+    date: new Date().toISOString().split('T')[0],
+    description: "Structural analysis and design of primary framing members."
+  });
+
+  const [logo, setLogo] = useState(null);
+  const [logoPreview, setLogoPreview] = useState(null);
+
+  const [pdfLibLoaded, setPdfLibLoaded] = useState(false);
+  const fileInputRef = useRef(null);
+  const logoInputRef = useRef(null);
+
+  // --- 1. Load PDF-Lib Dynamically ---
+  useEffect(() => {
+    const loadPdfLib = async () => {
+      if (window.PDFLib) {
+        setPdfLibLoaded(true);
+        return;
+      }
+      try {
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+        script.onload = () => setPdfLibLoaded(true);
+        script.onerror = () => console.error("Failed to load PDF-Lib");
+        document.body.appendChild(script);
+      } catch (err) {
+        console.error("Error loading PDF script", err);
+      }
+    };
+    loadPdfLib();
+  }, []);
+
+  // --- 2. Background Page Counter ---
+  useEffect(() => {
+    if (!pdfLibLoaded || files.length === 0) return;
+
+    const countPages = async () => {
+      const { PDFDocument } = window.PDFLib;
+      const updatedFiles = [...files];
+      let changed = false;
+
+      for (let i = 0; i < updatedFiles.length; i++) {
+        if (updatedFiles[i].pageCount === 'Calc...') {
+          try {
+            const arrayBuffer = await updatedFiles[i].file.arrayBuffer();
+            const pdf = await PDFDocument.load(arrayBuffer);
+            updatedFiles[i].pageCount = pdf.getPageCount();
+            updatedFiles[i].rawPages = pdf.getPageCount();
+            changed = true;
+          } catch (e) {
+            console.error("Could not count pages for", updatedFiles[i].name);
+            updatedFiles[i].pageCount = 'Err';
+            updatedFiles[i].rawPages = 0;
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        setFiles(updatedFiles);
+      }
+    };
+
+    countPages();
+  }, [files, pdfLibLoaded]);
+
+  // --- Event Handlers ---
+
+  const handleFileUpload = (e) => {
+    const uploadedFiles = Array.from(e.target.files);
+    const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+
+    const newFileObjects = uploadedFiles.map((file) => ({
+      id: crypto.randomUUID(),
+      file: file,
+      name: file.name,
+      sectionTitle: file.name.replace('.pdf', '').replace(/_/g, ' '), 
+      sectionSubtitle: '',
+      calcsBy: '',
+      checkedBy: '',
+      revision: '0',
+      uploadDate: currentDate,
+      pageCount: 'Calc...', 
+      rawPages: 0,
+      size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+      depth: 0
+    }));
+    setFiles((prev) => [...prev, ...newFileObjects]);
+  };
+
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setLogo(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLogoPreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const removeLogo = () => {
+    setLogo(null);
+    setLogoPreview(null);
+    if (logoInputRef.current) logoInputRef.current.value = "";
+  };
+
+  const removeFile = (id) => {
+    setFiles(files.filter(f => f.id !== id));
+  };
+
+  const moveFile = (index, direction) => {
+    if (direction === -1 && index === 0) return;
+    if (direction === 1 && index === files.length - 1) return;
+
+    const newFiles = [...files];
+    const temp = newFiles[index];
+    newFiles[index] = newFiles[index + direction];
+    newFiles[index + direction] = temp;
+    
+    if (index + direction === 0) {
+      newFiles[index + direction].depth = 0;
+    }
+
+    setFiles(newFiles);
+  };
+
+  const changeDepth = (index, delta) => {
+    const newFiles = [...files];
+    const newDepth = newFiles[index].depth + delta;
+    if (newDepth >= 0 && newDepth <= 2 && !(index === 0 && newDepth > 0)) {
+      newFiles[index].depth = newDepth;
+      setFiles(newFiles);
+    }
+  };
+
+  const updateFileField = (id, field, value) => {
+    setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
+  };
+
+  const updateMeta = (field, value) => {
+    setProjectMeta(prev => ({ ...prev, [field]: value }));
+  };
+
+  // --- Derived State: Calculate Section Numbers ---
+  const numberedFiles = useMemo(() => {
+    let mainCounter = 0;
+    let subCounter = 0;
+    let subSubCounter = 0;
+
+    return files.map(file => {
+      let sectionLabel = "";
+      
+      if (file.depth === 0) {
+        mainCounter++;
+        subCounter = 0;
+        subSubCounter = 0;
+        sectionLabel = `${mainCounter}`;
+      } else if (file.depth === 1) {
+        subCounter++;
+        subSubCounter = 0;
+        sectionLabel = `${mainCounter}.${subCounter}`;
+      } else if (file.depth === 2) {
+        subSubCounter++;
+        sectionLabel = `${mainCounter}.${subCounter}.${subSubCounter}`;
+      }
+
+      return { ...file, sectionLabel };
+    });
+  }, [files]);
+
+  // --- Helper: Text Drawing with Wrapping ---
+  const drawWrappedText = (page, text, y, size, font, rgb, color = [0,0,0], maxWidth, align = 'center') => {
+    if (!text) return;
+    
+    const { width } = page.getSize();
+    const safeWidth = maxWidth || (width - 100); 
+
+    const words = text.split(' ');
+    let lines = [];
+    let currentLine = words[0];
+
+    for (let i = 1; i < words.length; i++) {
+      const word = words[i];
+      const width = font.widthOfTextAtSize(`${currentLine} ${word}`, size);
+      if (width < safeWidth) {
+        currentLine += ` ${word}`;
+      } else {
+        lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    lines.push(currentLine);
+
+    const lineHeight = size * 1.3;
+    const centerIndex = (lines.length - 1) / 2;
+    
+    lines.forEach((line, i) => {
+       const dy = (centerIndex - i) * lineHeight;
+       const lineY = y + dy; 
+       
+       const textWidth = font.widthOfTextAtSize(line, size);
+       let xPos = (width - textWidth) / 2;
+       if (align === 'left') xPos = 50; 
+
+       page.drawText(line, {
+         x: xPos,
+         y: lineY,
+         size: size,
+         font: font,
+         color: rgb(color[0], color[1], color[2]),
+       });
+    });
+  };
+
+  // --- PDF Generation Logic ---
+  const generateBinder = async () => {
+    if (!pdfLibLoaded) {
+      alert("PDF Engine is still initializing. Please wait a moment and try again.");
+      return;
+    }
+    
+    setIsProcessing(true);
+    
+    try {
+      const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+
+      const mergedPdf = await PDFDocument.create();
+      const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
+      const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
+      const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
+
+      // --- Prepare Logo ---
+      let embeddedLogo = null;
+      let logoDims = null;
+      if (logo) {
+        try {
+          const logoBytes = await logo.arrayBuffer();
+          const isPng = logo.type === 'image/png';
+          embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes);
+          logoDims = embeddedLogo.scale(0.5); // Initial scale, adjusted below
+        } catch (e) {
+          console.error("Error embedding logo", e);
+          alert("Could not process logo image. Proceeding without logo.");
+        }
+      }
+
+      // --- PASS 0: Generate Cover Sheet ---
+      const coverPage = mergedPdf.addPage();
+      const { width, height } = coverPage.getSize();
+
+      // Place Logo (Top Center)
+      if (embeddedLogo) {
+        // Constrain width to 250px max
+        const maxWidth = 250;
+        const scaleFactor = maxWidth / embeddedLogo.width;
+        const finalDims = embeddedLogo.scale(scaleFactor > 1 ? 1 : scaleFactor); // Don't upscale
+        
+        coverPage.drawImage(embeddedLogo, {
+          x: (width - finalDims.width) / 2,
+          y: height - 100 - finalDims.height, // Positioned near top
+          width: finalDims.width,
+          height: finalDims.height,
+        });
+      }
+      
+      drawWrappedText(coverPage, projectMeta.title.toUpperCase(), height - 250, 24, fontBold, rgb, [0,0,0], width - 100);
+      drawWrappedText(coverPage, `PROJECT NO: ${projectMeta.number}`, height - 300, 14, fontRegular, rgb, [0.4,0.4,0.4], width - 100);
+      drawWrappedText(coverPage, "CALCULATION PACKAGE", height / 2, 18, fontBold, rgb, [0,0,0], width - 100);
+      drawWrappedText(coverPage, "PREPARED FOR:", height - 550, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
+      drawWrappedText(coverPage, projectMeta.client, height - 570, 16, fontRegular, rgb, [0,0,0], width - 100);
+      drawWrappedText(coverPage, "DATE:", height - 620, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
+      drawWrappedText(coverPage, projectMeta.date, height - 640, 14, fontRegular, rgb, [0,0,0], width - 100);
+      if (projectMeta.description) {
+        drawWrappedText(coverPage, projectMeta.description, 100, 10, fontOblique, rgb, [0.3,0.3,0.3], width - 150);
+      }
+
+      // --- PASS 1: Analysis & Pagination ---
+      const fileAnalysis = [];
+      const entriesPerPage = 25; 
+      const tocPageCount = Math.ceil(numberedFiles.length / entriesPerPage) || 1;
+      let runningPageNumber = 1 + tocPageCount + 1; 
+
+      for (const fileData of numberedFiles) {
+        const pCount = fileData.rawPages || 1; 
+        fileAnalysis.push({
+          ...fileData,
+          startPage: runningPageNumber + 1
+        });
+        runningPageNumber += 1 + pCount;
+      }
+
+      // --- PASS 2: Generate Table of Contents ---
+      for (let p = 0; p < tocPageCount; p++) {
+        const tocPage = mergedPdf.addPage();
+        drawWrappedText(tocPage, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
+        if (tocPageCount > 1) {
+            drawWrappedText(tocPage, `Page ${p + 1} of ${tocPageCount}`, height - 85, 10, fontRegular, rgb, [0.5,0.5,0.5]);
+        }
+
+        const startIdx = p * entriesPerPage;
+        const endIdx = Math.min(startIdx + entriesPerPage, fileAnalysis.length);
+        let yPos = height - 120;
+
+        for (let i = startIdx; i < endIdx; i++) {
+          const item = fileAnalysis[i];
+          const isMain = item.depth === 0;
+          const indent = isMain ? 50 : item.depth === 1 ? 70 : 90;
+          const fontSize = isMain ? 12 : 11;
+          const font = isMain ? fontBold : fontRegular;
+          const labelWidth = 60;
+
+          tocPage.drawText(item.sectionLabel, { x: indent, y: yPos, size: fontSize, font: font });
+          let title = item.sectionTitle || "Untitled Section";
+          if (title.length > 55) title = title.substring(0, 52) + "...";
+          tocPage.drawText(title, { x: indent + labelWidth, y: yPos, size: fontSize, font: font });
+
+          const pageNumString = item.startPage.toString();
+          const pageNumWidth = font.widthOfTextAtSize(pageNumString, fontSize);
+          const dotsEnd = width - 60 - pageNumWidth;
+          const titleEnd = indent + labelWidth + font.widthOfTextAtSize(title, fontSize);
+          
+          if (dotsEnd > titleEnd + 5) {
+             const dotString = ".".repeat(Math.floor((dotsEnd - (titleEnd + 5)) / 4));
+             tocPage.drawText(dotString, { x: titleEnd + 5, y: yPos, size: 10, font: fontRegular, color: rgb(0.7,0.7,0.7) });
+          }
+
+          tocPage.drawText(pageNumString, { x: width - 50 - pageNumWidth, y: yPos, size: fontSize, font: font });
+          yPos -= 25;
+        }
+      }
+
+      // --- PASS 3: Merge Content & Create Dividers ---
+      for (const fileData of numberedFiles) {
+        // A. Divider
+        if (true) { 
+          const dividerPage = mergedPdf.addPage();
+          const centerY = height / 2;
+          let titleSize = 18; let labelSize = 14; let color = [0, 0, 0];
+
+          if (fileData.depth === 1) { titleSize = 16; labelSize = 12; color = [0.3, 0.3, 0.3]; } 
+          else if (fileData.depth === 2) { titleSize = 14; labelSize = 10; color = [0.4, 0.4, 0.4]; }
+
+          // Place Logo on Divider (Top Right, Smaller)
+          if (embeddedLogo) {
+            const maxWidth = 100; // Smaller on divider
+            const scaleFactor = maxWidth / embeddedLogo.width;
+            const dividerLogoDims = embeddedLogo.scale(scaleFactor > 1 ? 1 : scaleFactor);
+            
+            dividerPage.drawImage(embeddedLogo, {
+              x: width - 50 - dividerLogoDims.width, // 50px margin from right
+              y: height - 50 - dividerLogoDims.height, // 50px margin from top
+              width: dividerLogoDims.width,
+              height: dividerLogoDims.height,
+            });
+          }
+
+          drawWrappedText(dividerPage, `SECTION ${fileData.sectionLabel}`, centerY + 40, labelSize, fontBold, rgb, [0.5, 0.5, 0.5]);
+          if (fileData.sectionTitle) drawWrappedText(dividerPage, fileData.sectionTitle, centerY, titleSize, fontBold, rgb, color);
+          if (fileData.sectionSubtitle) drawWrappedText(dividerPage, fileData.sectionSubtitle, centerY - 40, labelSize + 2, fontRegular, rgb, [0.4, 0.4, 0.4]);
+
+          const metaText = `Designed: ${fileData.calcsBy || '-'}   Checked: ${fileData.checkedBy || '-'}   Rev: ${fileData.revision || '-'}   Date: ${fileData.uploadDate}`;
+          drawWrappedText(dividerPage, metaText, 50, 10, fontRegular, rgb, [0.4, 0.4, 0.4]);
+        }
+
+        // B. Merge PDF
+        try {
+          const fileBytes = await fileData.file.arrayBuffer();
+          const srcDoc = await PDFDocument.load(fileBytes);
+          const copiedPages = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
+          copiedPages.forEach((page) => mergedPdf.addPage(page));
+        } catch (fileErr) {
+          const errPage = mergedPdf.addPage();
+          errPage.drawText(`Error loading file: ${fileData.name}`, { x: 50, y: 700, size: 12 });
+        }
+      }
+
+      const pdfBytes = await mergedPdf.save();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `Engineering_Calc_Package.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      alert(`Error generating PDF: ${error.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const getIndentStyles = (depth) => {
+    if (depth === 0) return '';
+    if (depth === 1) return 'pl-8 border-l-4 border-slate-200';
+    if (depth === 2) return 'pl-16 border-l-4 border-slate-200 ml-4';
+    return '';
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-8">
+      <div className="max-w-6xl mx-auto">
+        
+        {/* Header */}
+        <div className="flex justify-between items-end mb-8 border-b border-slate-300 pb-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+              <FilePlus className="w-8 h-8 text-blue-600" />
+              CalcBinder <span className="text-slate-400 font-light">Pro</span>
+            </h1>
+            <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
+          </div>
+          <div className="flex gap-2">
+            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${pdfLibLoaded ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+              <div className={`w-2 h-2 rounded-full ${pdfLibLoaded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+              {pdfLibLoaded ? 'Engine Ready' : 'Initializing Engine...'}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          
+          {/* Left Panel: Upload & List (8 cols) */}
+          <div className="lg:col-span-8 space-y-6">
+            
+            {/* Project Details */}
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+              <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-500" /> Cover Sheet Details
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                {/* Logo Upload (New) */}
+                <div className="md:col-span-3 flex flex-col items-center justify-center">
+                  <div 
+                    className="w-full aspect-square bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors relative overflow-hidden group"
+                    onClick={() => logoInputRef.current?.click()}
+                  >
+                    {logoPreview ? (
+                      <>
+                        <img src={logoPreview} alt="Company Logo" className="w-full h-full object-contain p-2" />
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <span className="text-white text-xs font-medium">Change</span>
+                        </div>
+                        <button 
+                           onClick={(e) => { e.stopPropagation(); removeLogo(); }}
+                           className="absolute top-1 right-1 p-1 bg-white rounded-full text-slate-500 hover:text-red-500 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </>
+                    ) : (
+                      <div className="text-center p-2">
+                        <ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-1" />
+                        <span className="text-[10px] text-slate-400 font-medium uppercase">Upload Logo</span>
+                      </div>
+                    )}
+                    <input 
+                      type="file" 
+                      accept="image/png, image/jpeg" 
+                      className="hidden" 
+                      ref={logoInputRef} 
+                      onChange={handleLogoUpload} 
+                    />
+                  </div>
+                </div>
+
+                {/* Text Inputs */}
+                <div className="md:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Project Name</label>
+                    <input type="text" value={projectMeta.title} onChange={(e) => updateMeta('title', e.target.value)} className="w-full px-3 py-2 text-base font-medium border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Hash className="w-3 h-3" /> Project Number</label>
+                    <input type="text" value={projectMeta.number} onChange={(e) => updateMeta('number', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Date</label>
+                    <input type="date" value={projectMeta.date} onChange={(e) => updateMeta('date', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><User className="w-3 h-3" /> Client Name</label>
+                    <input type="text" value={projectMeta.client} onChange={(e) => updateMeta('client', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+                </div>
+                
+                <div className="md:col-span-12">
+                  <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><AlignLeft className="w-3 h-3" /> Description</label>
+                  <textarea value={projectMeta.description} onChange={(e) => updateMeta('description', e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
+                </div>
+              </div>
+            </div>
+
+            {/* Drop Zone */}
+            <div 
+              className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+              <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+              <p className="text-lg font-medium text-slate-700">Drop calculation PDFs here</p>
+              <p className="text-sm text-slate-500">or click to browse files</p>
+            </div>
+
+            {/* File List */}
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+              <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                <h2 className="font-semibold text-slate-700">Staged Sections ({files.length})</h2>
+                <span className="text-xs text-slate-500 uppercase tracking-wider font-bold">Structure</span>
+              </div>
+              
+              {files.length === 0 ? (
+                <div className="p-12 text-center text-slate-400 italic">No files staged. Upload PDFs to begin.</div>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {numberedFiles.map((file, index) => (
+                    <li key={file.id} className="p-4 hover:bg-slate-50 transition-colors flex gap-4 group">
+                      
+                      {/* Controls Area */}
+                      <div className="flex flex-col items-center justify-center gap-2 mr-2">
+                        <div className="flex flex-col">
+                            <button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button>
+                            <button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button>
+                        </div>
+                        <div className="flex gap-1">
+                            <button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-slate-100 disabled:hover:text-slate-500 transition-colors" title="Promote Section"><ArrowLeft className="w-3 h-3" /></button>
+                            <button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 hover:text-blue-600 disabled:opacity-30 disabled:hover:bg-slate-100 disabled:hover:text-slate-500 transition-colors" title="Demote Section"><ArrowRight className="w-3 h-3" /></button>
+                        </div>
+                      </div>
+
+                      {/* Section Number */}
+                      <div className="flex flex-col justify-start pt-2 w-10 shrink-0">
+                         <span className={`font-mono font-bold text-slate-500 ${file.depth === 0 ? 'text-lg' : file.depth === 1 ? 'text-sm text-slate-400 pl-1' : 'text-xs text-slate-400 pl-2'}`}>{file.sectionLabel}</span>
+                      </div>
+
+                      {/* Main Edit Area */}
+                      <div className={`flex-1 space-y-3 transition-all duration-300 ${getIndentStyles(file.depth)}`}>
+                        {/* Title & Subtitle */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{file.depth === 0 ? "Section Title" : file.depth === 1 ? "Subsection Title" : "Item Title"}</label>
+                          <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className={`w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none ${file.depth === 0 ? 'text-lg' : 'text-base'}`} />
+                        </div>
+                        <div>
+                          <input type="text" value={file.sectionSubtitle} onChange={(e) => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none placeholder:text-slate-300" placeholder="Subtitle (Optional)" />
+                        </div>
+
+                        {/* NEW: Engineering Metadata Inputs */}
+                        <div className="grid grid-cols-12 gap-2 bg-slate-50 p-2 rounded border border-slate-100">
+                          <div className="col-span-4">
+                            <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5 flex items-center gap-1"><User className="w-3 h-3" /> Calcs By</label>
+                            <input type="text" value={file.calcsBy} onChange={(e) => updateFileField(file.id, 'calcsBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Initials" />
+                          </div>
+                          <div className="col-span-4">
+                            <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5 flex items-center gap-1"><CheckSquare className="w-3 h-3" /> Checked By</label>
+                            <input type="text" value={file.checkedBy} onChange={(e) => updateFileField(file.id, 'checkedBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Initials" />
+                          </div>
+                          <div className="col-span-2">
+                             <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Rev</label>
+                             <input type="text" value={file.revision} onChange={(e) => updateFileField(file.id, 'revision', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-blue-500 outline-none text-center" />
+                          </div>
+                          <div className="col-span-2">
+                             <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Date</label>
+                             <div className="text-[10px] text-slate-500 pt-1.5 px-1 truncate">{file.uploadDate}</div>
+                          </div>
+                        </div>
+
+                        {/* File Stats */}
+                        <div className="flex items-center gap-2 text-xs text-slate-400 pt-1">
+                          <FileText className="w-3 h-3" />
+                          <span className="truncate max-w-[200px]">{file.name}</span>
+                          <span>•</span>
+                          <span className={`${file.pageCount === 'Err' ? 'text-red-500' : 'text-slate-500'}`}>
+                             {file.pageCount === 'Calc...' ? 'Counting...' : `${file.pageCount} Pages`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Divider Live Preview */}
+                      <div className="hidden sm:block">
+                        <div className="w-32 aspect-[1/1.4] bg-white border border-slate-200 shadow-sm rounded-sm flex flex-col items-center justify-center p-2 text-center overflow-hidden relative group-hover:shadow-md transition-shadow">
+                          {/* Paper Hole Punch circles */}
+                          <div className="absolute left-1 top-4 w-1 h-1 bg-slate-100 rounded-full"></div>
+                          <div className="absolute left-1 top-1/2 w-1 h-1 bg-slate-100 rounded-full"></div>
+                          <div className="absolute left-1 bottom-4 w-1 h-1 bg-slate-100 rounded-full"></div>
+                          
+                          {/* Logo Preview Miniature */}
+                          {logoPreview && (
+                            <div className="absolute top-1 right-1 w-6 h-6 opacity-30">
+                              <img src={logoPreview} alt="" className="w-full h-full object-contain" />
+                            </div>
+                          )}
+                          
+                          <div className={`font-bold text-slate-400 mb-2 uppercase tracking-widest ${file.depth === 0 ? 'text-[8px]' : 'text-[6px]'}`}>Section {file.sectionLabel}</div>
+                          <div className={`font-bold text-slate-900 leading-tight mb-1 break-words w-full ${file.depth === 0 ? 'text-[10px]' : 'text-[8px]'}`}>{file.sectionTitle || "Untitled"}</div>
+                          
+                          {/* Mini Metadata Preview */}
+                          <div className="absolute bottom-2 left-0 right-0 border-t border-slate-100 pt-1 flex justify-center gap-1">
+                            <div className="h-[2px] w-20 bg-slate-100"></div>
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-center text-slate-400 mt-1">Divider Preview</div>
+                      </div>
+
+                      {/* Delete */}
+                      <div className="flex items-start pt-1">
+                        <button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="Remove File"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          {/* Right Panel: Output & Config */}
+          <div className="lg:col-span-4 space-y-6">
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200 sticky top-6">
+              <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Output Configuration</h3>
+              
+              <div className="space-y-4 mb-6">
+                <div className="flex items-center justify-between text-sm py-2 border-b border-slate-50">
+                  <span className="text-slate-600">Total Sections</span>
+                  <span className="font-mono font-medium bg-slate-100 px-2 py-0.5 rounded">{files.length}</span>
+                </div>
+                
+                {!pdfLibLoaded && (
+                   <div className="flex items-start gap-3 p-3 bg-yellow-50 rounded border border-yellow-100 animate-pulse">
+                     <AlertCircle className="w-4 h-4 text-yellow-600 mt-0.5" />
+                     <div className="text-xs text-yellow-800"><span className="font-semibold">Loading Engine...</span></div>
+                   </div>
+                )}
+
+                <div className="space-y-2 pt-2">
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" id="toc" className="rounded text-blue-600 focus:ring-blue-500" checked disabled />
+                    <label htmlFor="toc" className="text-sm text-slate-700">Generate Table of Contents (Auto)</label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" id="dividers" className="rounded text-blue-600 focus:ring-blue-500" defaultChecked />
+                    <label htmlFor="dividers" className="text-sm text-slate-700">Insert Section Dividers</label>
+                  </div>
+                </div>
+              </div>
+
+              <button onClick={generateBinder} disabled={files.length === 0 || isProcessing || !pdfLibLoaded} className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-md text-white font-medium transition-all shadow-md ${files.length === 0 || isProcessing || !pdfLibLoaded ? 'bg-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:transform active:scale-95'}`}>
+                {isProcessing ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Compiling Binder...</> : <><Save className="w-5 h-5" /> Download Merged PDF</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default CalcBinder;
