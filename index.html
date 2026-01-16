@@ -743,7 +743,9 @@
                          const indent = file.depth === 0 ? 50 : file.depth === 1 ? 70 : 90;
                          const font = file.depth === 0 ? fontBold : fontRegular;
                          const fontSize = file.depth === 0 ? 12 : 11;
-                         const maxWidth = width - (indent + 60) - 50;
+                         
+                         // Increased margin for cleaner separation
+                         const maxWidth = width - (indent + 60) - 80;
                          
                          const title = file.sectionTitle || "Untitled";
                          const lines = getWrappedLines(title, fontSize, font, maxWidth);
@@ -1079,28 +1081,8 @@
                                                             <div className="col-span-4 text-[10px] text-slate-500 pt-1.5 px-1">{file.uploadDate}</div>
                                                         </div>
                                                         <div className="flex items-center justify-between text-xs text-slate-400">
-                                                            <div className="flex items-center gap-2">
-                                                                <FileText className={`w-3 h-3 ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`} />
-                                                                <span className={`truncate max-w-[200px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-600 font-medium' : ''}`} title={file.name}>
-                                                                    {file.name}
-                                                                </span>
-                                                                <span className="text-slate-300">•</span>
-                                                                {file.isPlaceholder ? (
-                                                                    <input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />
-                                                                ) : (
-                                                                    <span>{file.pageCount} Pages</span>
-                                                                )}
-                                                            </div>
-                                                            
-                                                            <label className={`flex items-center gap-1 cursor-pointer text-[10px] px-1.5 py-0.5 rounded transition-colors ${
-                                                                (!file.isPlaceholder && !file.fileObj && !file.downloadURL) 
-                                                                ? 'bg-red-100 text-red-600 hover:bg-red-200 border border-red-200' 
-                                                                : 'text-blue-500 hover:text-blue-700 hover:bg-blue-50'
-                                                            }`} title={(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link Original File" : "Replace PDF File"}>
-                                                                <RefreshCw className="w-3 h-3" />
-                                                                <span className="font-medium">{(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link PDF" : (file.isPlaceholder ? "Upload" : "Replace")}</span>
-                                                                <input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} />
-                                                            </label>
+                                                            <div className="flex items-center gap-2"><FileText className="w-3 h-3" /><span className="truncate max-w-[200px]">{file.name}</span><span className="text-slate-300">•</span>{file.isPlaceholder ? (<input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />) : (<span>{file.pageCount} Pages</span>)}</div>
+                                                            <label className="flex items-center gap-1 cursor-pointer text-blue-500 hover:text-blue-700"><RefreshCw className="w-3 h-3" /> {file.isPlaceholder ? "Upload" : "Replace"}<input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} /></label>
                                                         </div>
                                                     </div>
                                                     <div className="flex items-start pt-1"><button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 rounded"><Trash2 className="w-4 h-4" /></button></div>
