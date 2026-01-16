@@ -34,7 +34,7 @@
         import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, listAll, getMetadata } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, listAll, getMetadata, getBytes } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
 
         // --- ERROR BOUNDARY ---
         class ErrorBoundary extends React.Component {
@@ -98,6 +98,39 @@
         }
 
         // --- COMPONENTS ---
+
+        const CorsHelpModal = ({ onClose }) => (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 relative">
+                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                    <h2 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2"><Globe className="w-6 h-6 text-blue-600" /> Fixing Download Errors (CORS)</h2>
+                    <div className="prose prose-sm text-slate-600 max-h-[60vh] overflow-y-auto">
+                        <p>If you see "Failed to fetch" errors when generating PDFs, Google Storage is blocking the browser from downloading the file. You must configure CORS on your bucket.</p>
+                        <ol className="list-decimal pl-5 space-y-2">
+                            <li>Go to the <a href="https://console.cloud.google.com/" target="_blank" className="text-blue-600 hover:underline">Google Cloud Console</a>.</li>
+                            <li>Open the Cloud Shell (terminal icon in top right).</li>
+                            <li>Create a config file: <code>nano cors.json</code></li>
+                            <li>Paste this configuration:
+                                <pre className="bg-slate-100 p-2 rounded text-xs mt-1">
+{`[
+  {
+    "origin": ["*"],
+    "method": ["GET"],
+    "maxAgeSeconds": 3600
+  }
+]`}
+                                </pre>
+                            </li>
+                            <li>Save (Ctrl+O, Enter) and Exit (Ctrl+X).</li>
+                            <li>Run this command (replace <code>YOUR_BUCKET_NAME</code> with the 'storageBucket' from your config):
+                                <pre className="bg-slate-100 p-2 rounded text-xs mt-1 font-bold">gsutil cors set cors.json gs://YOUR_BUCKET_NAME</pre>
+                            </li>
+                        </ol>
+                        <p className="text-xs italic mt-2">Note: This allows any website to download your public files. For tighter security, replace <code>*</code> with your specific domain.</p>
+                    </div>
+                </div>
+            </div>
+        );
 
         const SetupScreen = ({ onSave }) => {
             const [configInput, setConfigInput] = useState('');
@@ -205,6 +238,7 @@
             const [user, setUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState(isOfflineMode ? 'offline' : 'connecting'); 
             const [authError, setAuthError] = useState(null);
+            const [showCorsHelp, setShowCorsHelp] = useState(false);
             
             // --- Multi-Project State ---
             const [projects, setProjects] = useState([]);
@@ -283,12 +317,7 @@
                             await signInAnonymously(auth);
                         } catch (error) {
                             setSyncStatus('offline');
-                            // Map friendly error messages
-                            let msg = error.code;
-                            if (error.code === 'auth/configuration-not-found' || error.code === 'auth/admin-restricted-operation') {
-                                msg = "Anonymous Auth disabled in Console";
-                            }
-                            setAuthError(msg);
+                            setAuthError("Auth Failed: " + error.code);
                         }
                     }
                 });
@@ -309,7 +338,10 @@
                                 const cloudFiles = data.files || [];
                                 return cloudFiles.map(cf => {
                                     const localMatch = currentFiles.find(lf => lf.id === cf.id);
-                                    return { ...cf, fileObj: localMatch?.fileObj || null };
+                                    return { 
+                                        ...cf, 
+                                        fileObj: localMatch?.fileObj || null 
+                                    };
                                 });
                             });
                         }
@@ -398,10 +430,7 @@
                 e.stopPropagation();
                 if (!confirm("Delete project? ALL FILES WILL BE DELETED.")) return;
                 
-                if (isOfflineMode) {
-                     // In offline mode we can't really "delete" a project easily since we spoofed it, but logic holds
-                     return;
-                }
+                if (isOfflineMode) { return; }
 
                 const projectToDelete = projects.find(p => p.id === projectId);
                 if (!projectToDelete) return;
@@ -426,10 +455,13 @@
 
             const uploadFileToFirebase = async (file) => {
                 if (isOfflineMode || !user) return null;
-                const fileRef = ref(storage, `shared/files/${crypto.randomUUID()}-${file.name}`);
+                // Return structured object: { url, path }
+                const storagePath = `shared/files/${crypto.randomUUID()}-${file.name}`;
+                const fileRef = ref(storage, storagePath);
                 await uploadBytes(fileRef, file);
                 setRefreshStats(prev => prev + 1); 
-                return await getDownloadURL(fileRef);
+                const url = await getDownloadURL(fileRef);
+                return { url, path: storagePath };
             };
 
             const deleteFromCloud = async (url) => {
@@ -458,15 +490,16 @@
                         pageCount = rawPages;
                     } catch (err) { pageCount = 'Err'; }
 
-                    let downloadURL = null;
+                    let downloadInfo = { url: null, path: null };
                     if (!isOfflineMode && user) {
-                        try { downloadURL = await uploadFileToFirebase(file); } catch (err) { console.warn("Upload failed"); }
+                        try { downloadInfo = await uploadFileToFirebase(file); } catch (err) { console.warn("Upload failed"); }
                     }
 
                     setFiles(prev => [...prev, {
                         id: crypto.randomUUID(),
                         name: file.name,
-                        downloadURL: downloadURL,
+                        downloadURL: downloadInfo.url,
+                        storagePath: downloadInfo.path, // Store the explicit path
                         fileObj: file, 
                         sectionTitle: file.name.replace('.pdf', '').replace(/_/g, ' '), 
                         sectionSubtitle: '',
@@ -512,19 +545,20 @@
                 const oldFile = files.find(f => f.id === id);
                 const oldUrl = oldFile ? oldFile.downloadURL : null;
 
-                let url = null;
+                let downloadInfo = { url: null, path: null };
                 if (!isOfflineMode && user) {
-                    try { url = await uploadFileToFirebase(file); } catch(e) {}
+                    try { downloadInfo = await uploadFileToFirebase(file); } catch(e) {}
                 }
 
-                if (url && oldUrl) await deleteFromCloud(oldUrl);
+                if (downloadInfo.url && oldUrl) await deleteFromCloud(oldUrl);
 
                 setFiles(prev => prev.map(f => {
                     if (f.id !== id) return f;
                     return {
                         ...f,
                         name: file.name,
-                        downloadURL: url,
+                        downloadURL: downloadInfo.url,
+                        storagePath: downloadInfo.path,
                         fileObj: file,
                         uploadDate: currentDate,
                         size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
@@ -627,9 +661,7 @@
 
                     const parsedScale = parseFloat(logoScale) || 1.0;
 
-                    // --- LOGO EMBEDDING STRATEGY ---
                     let embeddedLogo = null;
-                    // Use logoUrl as it now holds Base64 string directly
                     if (logoUrl) {
                         try {
                             const res = await fetch(logoUrl);
@@ -638,7 +670,6 @@
                             try {
                                 embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes);
                             } catch (e1) {
-                                // Fallback swap format
                                 try {
                                     embeddedLogo = isPng ? await mergedPdf.embedJpg(logoBytes) : await mergedPdf.embedPng(logoBytes);
                                 } catch (e2) {
@@ -720,14 +751,18 @@
                                 drawWrappedText(p, `PLACEHOLDER FOR SECTION ${f.sectionLabel}`, p.getHeight()/2, 18, fontBold, rgb, [0.7,0.7,0.7]);
                             }
                         } else {
-                            // PRIORITY: Try Local File Object First
                             try {
                                 let fileBytes = null;
                                 if (f.fileObj) {
                                     fileBytes = await f.fileObj.arrayBuffer();
+                                } else if (f.storagePath) {
+                                    // 1. Try SDK Download (Authenticated)
+                                    const r = ref(storage, f.storagePath);
+                                    fileBytes = await getBytes(r);
                                 } else if (f.downloadURL) {
+                                    // 2. Fallback fetch (May hit CORS)
                                     const res = await fetch(f.downloadURL);
-                                    if (!res.ok) throw new Error("Fetch failed: " + res.statusText);
+                                    if (!res.ok) throw new Error("Fetch failed");
                                     fileBytes = await res.arrayBuffer();
                                 }
 
@@ -736,14 +771,15 @@
                                     const copied = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
                                     copied.forEach(p => mergedPdf.addPage(p));
                                 } else {
-                                    throw new Error("No data found");
+                                    throw new Error("No data source found");
                                 }
                             } catch (e) {
                                 console.error(`Failed to load ${f.name}`, e);
                                 const errP = mergedPdf.addPage();
                                 errP.drawText(`Error loading file: ${f.name}`, { x: 50, y: 700 });
-                                errP.drawText(`Details: ${e.message}`, { x: 50, y: 680, size: 10, color: rgb(1,0,0) });
-                                errP.drawText(`Hint: If this is an older file, try 'Replace' to re-upload.`, { x: 50, y: 660, size: 10 });
+                                errP.drawText(`Reason: ${e.message}`, { x: 50, y: 680, size: 10, color: rgb(1,0,0) });
+                                errP.drawText(`This file could not be downloaded from the cloud.`, { x: 50, y: 660, size: 10 });
+                                errP.drawText(`Please enable CORS on your bucket or click 'Replace' to re-upload locally.`, { x: 50, y: 640, size: 10 });
                             }
                         }
                     }
@@ -786,6 +822,7 @@
 
             return (
                 <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-8">
+                    {showCorsHelp && <CorsHelpModal onClose={() => setShowCorsHelp(false)} />}
                     <div className="max-w-[95%] 2xl:max-w-[1600px] mx-auto pt-4">
                         {/* Header */}
                         <div className="flex justify-between items-end mb-8 border-b border-slate-300 pb-4">
@@ -794,6 +831,26 @@
                                 <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
                             </div>
                             <div className="flex items-center gap-4">
+                                <button 
+                                    onClick={() => setShowCorsHelp(true)} 
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"
+                                >
+                                    <Globe className="w-4 h-4" /> CORS Help
+                                </button>
+
+                                {/* Storage Usage Indicator */}
+                                {syncStatus === 'synced' && (
+                                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 border border-slate-200 text-slate-600" title={`Total Cloud Storage Used: ${formatBytes(storageStats.usedBytes)}`}>
+                                        <Database className="w-4 h-4 text-slate-400" />
+                                        <div className="flex flex-col items-end leading-none">
+                                            <span>{formatBytes(storageStats.usedBytes)}</span>
+                                            <div className="w-16 h-1 bg-slate-200 rounded-full mt-0.5 overflow-hidden">
+                                                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min((storageStats.usedBytes / (1024*1024*1024))*100, 100)}%` }}></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {authError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 px-3 py-1.5 rounded-full flex items-center gap-2 animate-pulse"><AlertTriangle className="w-4 h-4" /><span>{authError}</span></div>}
                                 <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${syncStatus === 'synced' ? 'bg-green-50 text-green-700 border-green-200' : syncStatus === 'syncing' ? 'bg-blue-50 text-blue-700 border-blue-200' : syncStatus === 'error' ? 'bg-red-50 text-red-700 border-red-200' : syncStatus === 'offline' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
                                     {syncStatus === 'synced' && <Check className="w-4 h-4" />}
@@ -813,7 +870,7 @@
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        <div className="grid grid-cols-12 gap-8">
                             <div className="col-span-12 md:col-span-3 lg:col-span-2 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[calc(100vh-150px)] sticky top-6">
                                 <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                                     <h2 className="font-semibold text-slate-700 flex items-center gap-2"><Layout className="w-4 h-4" /> Projects</h2>
