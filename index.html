@@ -625,6 +625,40 @@
                 });
             }, [files]);
 
+            // --- HELPER: Measure Wrapped Text Height ---
+            const measureWrappedTextHeight = (text, size, font, maxWidth) => {
+                if (!text) return 0;
+                const words = text.split(' ');
+                let lines = [], currentLine = words[0];
+                for (let i = 1; i < words.length; i++) {
+                    const word = words[i];
+                    const width = font.widthOfTextAtSize(`${currentLine} ${word}`, size);
+                    if (width < maxWidth) currentLine += ` ${word}`;
+                    else { lines.push(currentLine); currentLine = word; }
+                }
+                lines.push(currentLine);
+                return lines.length * (size * 1.3);
+            };
+
+            // --- HELPER: Get Wrapped Lines Array ---
+            const getWrappedLines = (text, size, font, maxWidth) => {
+                if (!text) return [];
+                const words = text.split(' ');
+                let lines = [], currentLine = words[0];
+                for (let i = 1; i < words.length; i++) {
+                    const word = words[i];
+                    const width = font.widthOfTextAtSize(`${currentLine} ${word}`, size);
+                    if (width < maxWidth) {
+                        currentLine += ` ${word}`;
+                    } else {
+                        lines.push(currentLine);
+                        currentLine = word;
+                    }
+                }
+                lines.push(currentLine);
+                return lines;
+            };
+
             const drawWrappedText = (page, text, y, size, font, rgb, color = [0,0,0], maxWidth, align = 'center') => {
                 if (!text) return;
                 const { width } = page.getSize();
@@ -661,6 +695,7 @@
 
                     const parsedScale = parseFloat(logoScale) || 1.0;
 
+                    // --- LOGO EMBEDDING STRATEGY ---
                     let embeddedLogo = null;
                     if (logoUrl) {
                         try {
@@ -697,53 +732,132 @@
                     drawWrappedText(coverPage, projectMeta.date, height - 640, 14, fontRegular, rgb, [0,0,0], width - 100);
                     if (projectMeta.description) drawWrappedText(coverPage, projectMeta.description, 100, 10, fontOblique, rgb, [0.3,0.3,0.3], width - 150);
 
-                    const fileAnalysis = [];
-                    const entriesPerPage = 25; 
-                    const tocPageCount = Math.ceil(numberedFiles.length / entriesPerPage) || 1;
-                    let runningPageNumber = 1 + tocPageCount + 1; 
-                    for (const f of numberedFiles) {
+                    // --- Measure TOC ---
+                    const tocLineHeight = 14; 
+                    const tocStartY = height - 120;
+                    const tocBottomMargin = 50;
+                    let currentTocPage = 1;
+                    let currentY = tocStartY;
+                    
+                    const tocLayout = numberedFiles.map(file => {
+                         const indent = file.depth === 0 ? 50 : file.depth === 1 ? 70 : 90;
+                         const font = file.depth === 0 ? fontBold : fontRegular;
+                         const fontSize = file.depth === 0 ? 12 : 11;
+                         const maxWidth = width - (indent + 60) - 50;
+                         
+                         const title = file.sectionTitle || "Untitled";
+                         const lines = getWrappedLines(title, fontSize, font, maxWidth);
+                         const entryHeight = (lines.length * fontSize * 1.2) + 10;
+                         
+                         if (currentY - entryHeight < tocBottomMargin) {
+                             currentTocPage++;
+                             currentY = tocStartY;
+                         }
+                         currentY -= entryHeight;
+                         return { ...file, lines, entryHeight };
+                    });
+                    
+                    const tocPageCount = currentTocPage;
+                    let nextContentPage = 1 + tocPageCount; // Content starts after TOC
+                    
+                    // Assign start pages to files
+                    for (let i = 0; i < tocLayout.length; i++) {
+                        const f = tocLayout[i];
                         const pCount = f.rawPages || 1; 
-                        fileAnalysis.push({ ...f, startPage: runningPageNumber + 1 });
-                        runningPageNumber += 1 + pCount;
+                        f.startPage = nextContentPage + 1; // +1 because the divider is the first page of the section
+                        nextContentPage += 1 + pCount;
                     }
 
-                    for (let p = 0; p < tocPageCount; p++) {
-                        const tocPage = mergedPdf.addPage();
-                        drawWrappedText(tocPage, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
-                        const startIdx = p * entriesPerPage;
-                        const endIdx = Math.min(startIdx + entriesPerPage, fileAnalysis.length);
-                        let yPos = height - 120;
-                        for (let i = startIdx; i < endIdx; i++) {
-                            const item = fileAnalysis[i];
-                            const indent = item.depth === 0 ? 50 : item.depth === 1 ? 70 : 90;
-                            const font = item.depth === 0 ? fontBold : fontRegular;
-                            const fontSize = item.depth === 0 ? 12 : 11;
-                            tocPage.drawText(item.sectionLabel, { x: indent, y: yPos, size: fontSize, font });
-                            let title = item.sectionTitle || "Untitled";
-                            if (title.length > 55) title = title.substring(0, 52) + "...";
-                            tocPage.drawText(title, { x: indent + 60, y: yPos, size: fontSize, font });
-                            tocPage.drawText(item.startPage.toString(), { x: width - 50 - font.widthOfTextAtSize(item.startPage.toString(), fontSize), y: yPos, size: fontSize, font });
-                            yPos -= 25;
-                        }
-                    }
+                    // --- Draw TOC ---
+                    let tocY = tocStartY;
+                    let tocPageRef = mergedPdf.addPage();
+                    drawWrappedText(tocPageRef, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
+                    
+                    const addNewTocPage = () => {
+                        tocPageRef = mergedPdf.addPage();
+                        tocY = tocStartY;
+                        drawWrappedText(tocPageRef, "TABLE OF CONTENTS (Cont.)", height - 60, 24, fontBold, rgb, [0,0,0]);
+                    };
+                    
+                    tocLayout.forEach((item) => {
+                         if (tocY - item.entryHeight < tocBottomMargin) addNewTocPage();
+                         
+                         const indent = item.depth === 0 ? 50 : item.depth === 1 ? 70 : 90;
+                         const font = item.depth === 0 ? fontBold : fontRegular;
+                         const fontSize = item.depth === 0 ? 12 : 11;
+                         const lineHeight = fontSize * 1.2;
+                         
+                         tocPageRef.drawText(item.sectionLabel, { x: indent, y: tocY, size: fontSize, font });
+                         
+                         const pageNumStr = item.startPage.toString();
+                         const pageNumWidth = font.widthOfTextAtSize(pageNumStr, fontSize);
+                         tocPageRef.drawText(pageNumStr, { x: width - 50 - pageNumWidth, y: tocY, size: fontSize, font });
+                         
+                         item.lines.forEach((line, lineIdx) => {
+                             tocPageRef.drawText(line, { 
+                                 x: indent + 60, 
+                                 y: tocY - (lineIdx * lineHeight), 
+                                 size: fontSize, 
+                                 font 
+                             });
+                         });
+                         tocY -= item.entryHeight;
+                    });
 
+                    // --- Dividers & Content ---
                     for (const f of numberedFiles) {
                         const divPage = mergedPdf.addPage();
-                        const centerY = height / 2;
-                        let tSize = 18, lSize = 14, color = [0,0,0];
-                        if (f.depth === 1) { tSize = 16; lSize = 12; color = [0.3,0.3,0.3]; }
-                        else if (f.depth === 2) { tSize = 14; lSize = 10; color = [0.4,0.4,0.4]; }
+                        const { width: divW, height: divH } = divPage.getSize();
                         
-                        if (embeddedLogo) {
-                            const maxWidth = 100;
-                            const baseScale = maxWidth / embeddedLogo.width;
-                            const finalDims = embeddedLogo.scale((baseScale > 1 ? 1 : baseScale) * parsedScale);
-                            divPage.drawImage(embeddedLogo, { x: width - 50 - finalDims.width, y: height - 50 - finalDims.height, width: finalDims.width, height: finalDims.height });
+                        const maxWidth = divW - 100;
+                        const divGap = 24;
+                        let tSize = 18, lSize = 14, subSize = 12;
+                        let color = [0,0,0];
+                        if (f.depth === 1) { tSize = 16; lSize = 12; subSize = 10; color = [0.3,0.3,0.3]; }
+                        else if (f.depth === 2) { tSize = 14; lSize = 10; subSize = 8; color = [0.4,0.4,0.4]; }
+
+                        const hLabel = measureWrappedTextHeight(`SECTION ${f.sectionLabel}`, lSize, fontBold, maxWidth);
+                        const hTitle = f.sectionTitle ? measureWrappedTextHeight(f.sectionTitle, tSize, fontBold, maxWidth) : 0;
+                        const hSub = f.sectionSubtitle ? measureWrappedTextHeight(f.sectionSubtitle, subSize, fontRegular, maxWidth) : 0;
+
+                        let totalH = hLabel;
+                        if (hTitle) totalH += divGap + hTitle;
+                        if (hSub) totalH += divGap + hSub;
+
+                        let currY = (divH / 2) + (totalH / 2);
+
+                        const labelY = currY - (hLabel / 2);
+                        drawWrappedText(divPage, `SECTION ${f.sectionLabel}`, labelY, lSize, fontBold, rgb, [0.5,0.5,0.5], maxWidth);
+                        currY -= hLabel;
+
+                        if (hTitle) {
+                            currY -= divGap;
+                            const titleY = currY - (hTitle / 2);
+                            drawWrappedText(divPage, f.sectionTitle, titleY, tSize, fontBold, rgb, color, maxWidth);
+                            currY -= hTitle;
                         }
-                        drawWrappedText(divPage, `SECTION ${f.sectionLabel}`, centerY + 40, lSize, fontBold, rgb, [0.5,0.5,0.5]);
-                        if(f.sectionTitle) drawWrappedText(divPage, f.sectionTitle, centerY, tSize, fontBold, rgb, color);
-                        if(f.sectionSubtitle) drawWrappedText(divPage, f.sectionSubtitle, centerY - 40, lSize + 2, fontRegular, rgb, [0.4,0.4,0.4]);
-                        drawWrappedText(divPage, `Designed: ${f.calcsBy||'-'}  Checked: ${f.checkedBy||'-'}  Rev: ${f.revision||'-'}  Date: ${f.uploadDate}`, 50, 10, fontRegular, rgb, [0.4,0.4,0.4]);
+
+                        if (hSub) {
+                            currY -= divGap;
+                            const subY = currY - (hSub / 2);
+                            drawWrappedText(divPage, f.sectionSubtitle, subY, subSize, fontRegular, rgb, [0.4,0.4,0.4], maxWidth);
+                        }
+
+                        if (embeddedLogo) {
+                            const maxWidthLogo = 100;
+                            const baseScaleLogo = maxWidthLogo / embeddedLogo.width;
+                            const effectiveScaleLogo = (baseScaleLogo > 1 ? 1 : baseScaleLogo) * parsedScale;
+                            const divLogoDims = embeddedLogo.scale(effectiveScaleLogo);
+                            divPage.drawImage(embeddedLogo, { 
+                                x: divW - 50 - divLogoDims.width, 
+                                y: divH - 50 - divLogoDims.height, 
+                                width: divLogoDims.width, 
+                                height: divLogoDims.height 
+                            });
+                        }
+
+                        const metaText = `Designed: ${f.calcsBy||'-'}  Checked: ${f.checkedBy||'-'}  Rev: ${f.revision||'-'}  Date: ${f.uploadDate}`;
+                        drawWrappedText(divPage, metaText, 50, 10, fontRegular, rgb, [0.4,0.4,0.4]);
 
                         if (f.isPlaceholder) {
                             for(let k=0; k < f.rawPages; k++) {
@@ -871,6 +985,7 @@
                         </div>
 
                         <div className="grid grid-cols-12 gap-8">
+                            {/* Project Sidebar */}
                             <div className="col-span-12 md:col-span-3 lg:col-span-2 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[calc(100vh-150px)] sticky top-6">
                                 <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                                     <h2 className="font-semibold text-slate-700 flex items-center gap-2"><Layout className="w-4 h-4" /> Projects</h2>
