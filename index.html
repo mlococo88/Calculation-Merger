@@ -496,6 +496,14 @@
             const fileInputRef = useRef(null);
             const logoInputRef = useRef(null);
 
+            // Create a Ref to track activeProjectId for listeners without stale closures
+            const activeProjectIdRef = useRef(activeProjectId);
+            
+            // Keep ref in sync
+            useEffect(() => {
+                activeProjectIdRef.current = activeProjectId;
+            }, [activeProjectId]);
+
             useEffect(() => {
                 const loadPdfLib = async () => {
                     if (window.PDFLib) { setPdfLibLoaded(true); return; }
@@ -553,8 +561,24 @@
                             })).sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified)); // Sort in memory
 
                             setProjects(projList);
-                            if (projList.length > 0 && !activeProjectId) {
-                                setActiveProjectId(projList[0].id);
+                            
+                            // BUG FIX: Use the REF, not state, to check current selection.
+                            // Only auto-select if NO project is selected, OR if the currently selected project was deleted.
+                            const currentId = activeProjectIdRef.current;
+                            
+                            if (projList.length > 0) {
+                                if (!currentId) {
+                                    // Initial load: select first
+                                    setActiveProjectId(projList[0].id);
+                                } else {
+                                    // Check if current still exists
+                                    const stillExists = projList.find(p => p.id === currentId);
+                                    if (!stillExists) {
+                                        // It was deleted, fallback to first
+                                        setActiveProjectId(projList[0].id);
+                                    }
+                                    // If it exists, DO NOTHING. Keep current selection.
+                                }
                             } else if (projList.length === 0) {
                                 handleCreateProject(currentUser.uid, "New Shared Project");
                             }
