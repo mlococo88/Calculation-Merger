@@ -3,38 +3,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Engineering Calculation Merger (Cloud Enabled)</title>
+    <title>Engineering Calculation Merger</title>
     
-    <!-- Tailwind CSS for styling -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- PDF-Lib Engine -->
+    <!-- PDF-Lib Engine (Required for PDF manipulation) -->
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 
     <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Google Font (Noto Sans for consistency) -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Noto Sans', sans-serif; }
+    </style>
 </head>
 <body class="bg-slate-50">
     <div id="root"></div>
 
     <!-- Main Application Script -->
     <script type="text/babel" data-type="module">
-        // Import React & Icons
+        // Import React
         import React, { useState, useRef, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+        
+        // Import Icons
         import { 
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
             Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
-            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book
+            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book, PenTool, ClipboardList, Type
         } from 'https://esm.sh/lucide-react@0.263.1';
 
-        // --- FIREBASE IMPORTS ---
-        import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, listAll, getMetadata, getBytes } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        // --- FIREBASE IMPORTS (v11.6.1) ---
+        import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, listAll, getMetadata, getBytes } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
+
+        // --- GLOBAL CONFIGURATION DETECTION ---
+        // This allows the app to work in the Canvas environment (auto-config) AND standalone (manual config)
+        let firebaseConfig = null;
+        let isConfigured = false;
+        let isOfflineMode = false;
+        let appId = 'default';
+        let initialAuthToken = null;
+
+        // 1. Check for Environment Injection
+        if (typeof __firebase_config !== 'undefined') {
+            try {
+                firebaseConfig = JSON.parse(__firebase_config);
+                isConfigured = true;
+                if (typeof __app_id !== 'undefined') appId = __app_id;
+                if (typeof __initial_auth_token !== 'undefined') initialAuthToken = __initial_auth_token;
+            } catch(e) { console.error("Env Config Parse Error", e); }
+        }
+
+        // 2. Fallback to LocalStorage (Standalone Mode)
+        if (!isConfigured) {
+            const savedConfig = localStorage.getItem('calcBinder_firebaseConfig');
+            if (savedConfig === 'offline') {
+                isOfflineMode = true;
+                isConfigured = true;
+            } else if (savedConfig) {
+                try {
+                    firebaseConfig = JSON.parse(savedConfig);
+                    if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+                        isConfigured = true;
+                        appId = firebaseConfig.appId || 'default';
+                    }
+                } catch (e) {
+                    localStorage.removeItem('calcBinder_firebaseConfig');
+                }
+            }
+        }
+
+        // --- FIREBASE INITIALIZATION ---
+        let app, auth, db, storage;
+        if (isConfigured && !isOfflineMode && firebaseConfig) {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                storage = getStorage(app);
+            } catch (e) {
+                console.error("Firebase Init Failed", e);
+                isConfigured = false;
+            }
+        }
 
         // --- ERROR BOUNDARY ---
         class ErrorBoundary extends React.Component {
@@ -61,43 +121,159 @@
             }
         }
 
-        // --- FIREBASE INIT ---
-        const savedConfig = localStorage.getItem('calcBinder_firebaseConfig');
-        let firebaseConfig = null;
-        let isConfigured = false;
-        let isOfflineMode = false;
-        let appId = 'default';
-
-        if (savedConfig === 'offline') {
-            isOfflineMode = true;
-            isConfigured = true;
-        } else if (savedConfig) {
-            try {
-                firebaseConfig = JSON.parse(savedConfig);
-                if (firebaseConfig.apiKey && firebaseConfig.projectId) {
-                    isConfigured = true;
-                    appId = firebaseConfig.appId || 'default';
-                }
-            } catch (e) {
-                localStorage.removeItem('calcBinder_firebaseConfig');
-            }
-        }
-
-        let app, auth, db, storage;
-        if (isConfigured && !isOfflineMode) {
-            try {
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-                storage = getStorage(app);
-            } catch (e) {
-                console.error("Init failed", e);
-                isConfigured = false; 
-                localStorage.removeItem('calcBinder_firebaseConfig'); 
-            }
-        }
-
         // --- COMPONENTS ---
+
+        // Detailed Cover Sheet Modal
+        const CoverSheetModal = ({ file, projectMeta, onClose, onSave }) => {
+            const [data, setData] = useState({
+                sectionTitle: file.sectionTitle || "",
+                sectionSubtitle: file.sectionSubtitle || "",
+                designedBy: file.designedBy || file.calcsBy || "",
+                designedDate: file.designedDate || file.uploadDate || "",
+                checkedBy: file.checkedBy || "",
+                checkedDate: file.checkedDate || "",
+                // Combined Field: QC Review
+                qcReviewBy: file.qcReviewBy || file.reviewedBy || file.qcBy || "",
+                qcReviewDate: file.qcReviewDate || file.reviewedDate || file.qcDate || "",
+                approvedBy: file.approvedBy || "",
+                approvedDate: file.approvedDate || "",
+                revision: file.revision || "0",
+                calcNo: file.calcNo || "",
+                objective: file.objective || "",
+                references: file.references || "",
+                program: file.program || "",
+                conclusions: file.conclusions || ""
+            });
+
+            const handleChange = (field, value) => {
+                setData(prev => ({ ...prev, [field]: value }));
+            };
+
+            const handleSave = () => {
+                onSave(file.id, data);
+                onClose();
+            };
+
+            const renderSignOffRow = (label, fieldPrefix) => (
+                <div className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-4 text-xs font-semibold text-slate-500 uppercase">{label}</div>
+                    <div className="col-span-5">
+                        <input 
+                            type="text" 
+                            className="w-full border border-slate-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+                            placeholder="Name/Initials"
+                            value={data[`${fieldPrefix}By`]} 
+                            onChange={e => handleChange(`${fieldPrefix}By`, e.target.value)} 
+                        />
+                    </div>
+                    <div className="col-span-3">
+                        <input 
+                            type="date" 
+                            className="w-full border border-slate-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+                            value={data[`${fieldPrefix}Date`]} 
+                            onChange={e => handleChange(`${fieldPrefix}Date`, e.target.value)} 
+                        />
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
+                        {/* Header */}
+                        <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50 rounded-t-xl">
+                            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                <ClipboardList className="w-6 h-6 text-blue-600" /> 
+                                Calculation Cover Sheet
+                            </h2>
+                            <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400 hover:text-slate-600">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Body - Scrollable */}
+                        <div className="p-6 overflow-y-auto space-y-6">
+                            
+                            <div className="grid grid-cols-2 gap-4 p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800">
+                                <div><span className="font-bold uppercase text-[10px] text-blue-400 block">Project</span> {projectMeta.title}</div>
+                                <div><span className="font-bold uppercase text-[10px] text-blue-400 block">Project No</span> {projectMeta.number}</div>
+                            </div>
+
+                            {/* Section 1: Identification */}
+                            <div className="space-y-4">
+                                <h3 className="text-sm font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100 pb-1">Identification</h3>
+                                <div className="grid grid-cols-12 gap-4">
+                                    <div className="col-span-8">
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Title</label>
+                                        <input type="text" className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={data.sectionTitle} onChange={e => handleChange('sectionTitle', e.target.value)} />
+                                    </div>
+                                    <div className="col-span-4">
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Calc No.</label>
+                                        <input type="text" className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. C-01" value={data.calcNo} onChange={e => handleChange('calcNo', e.target.value)} />
+                                    </div>
+                                    <div className="col-span-12">
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Subtitle / Element</label>
+                                        <input type="text" className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. Pier 3 Cap Design" value={data.sectionSubtitle} onChange={e => handleChange('sectionSubtitle', e.target.value)} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Section 2: Details */}
+                            <div className="space-y-4">
+                                <h3 className="text-sm font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100 pb-1">Technical Details</h3>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Objective / Description</label>
+                                    <textarea rows={3} className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="Describe the purpose and scope of this calculation..." value={data.objective} onChange={e => handleChange('objective', e.target.value)} />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Design Code / References</label>
+                                        <textarea rows={2} className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="e.g. AASHTO LRFD 9th Ed." value={data.references} onChange={e => handleChange('references', e.target.value)} />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1">Computer Program</label>
+                                        <textarea rows={2} className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="e.g. Excel, LEAP v20" value={data.program} onChange={e => handleChange('program', e.target.value)} />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1">Conclusions</label>
+                                    <textarea rows={2} className="w-full border border-slate-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="Summary of results..." value={data.conclusions} onChange={e => handleChange('conclusions', e.target.value)} />
+                                </div>
+                            </div>
+
+                            {/* Section 3: Sign-off */}
+                            <div className="space-y-4">
+                                <h3 className="text-sm font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100 pb-1">Sign-off</h3>
+                                <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                    <div className="grid grid-cols-12 gap-2 mb-1 text-[10px] uppercase font-bold text-slate-400">
+                                        <div className="col-span-4">Role</div>
+                                        <div className="col-span-5">Name</div>
+                                        <div className="col-span-3">Date</div>
+                                    </div>
+                                    {renderSignOffRow("Designed By", "designed")}
+                                    {renderSignOffRow("Checked By", "checked")}
+                                    {/* Consolidated Field */}
+                                    {renderSignOffRow("QC Review By", "qcReview")}
+                                    {renderSignOffRow("Approved By", "approved")}
+                                </div>
+                                <div className="flex items-center gap-2 justify-end">
+                                    <label className="text-xs font-semibold text-slate-500">Revision:</label>
+                                    <input type="text" className="w-16 border border-slate-300 rounded p-1 text-sm text-center focus:ring-2 focus:ring-blue-500 outline-none" value={data.revision} onChange={e => handleChange('revision', e.target.value)} />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end gap-2">
+                            <button onClick={onClose} className="px-4 py-2 text-slate-600 font-medium hover:bg-slate-200 rounded transition-colors">Cancel</button>
+                            <button onClick={handleSave} className="px-4 py-2 bg-blue-600 text-white font-medium hover:bg-blue-700 rounded shadow-sm transition-colors flex items-center gap-2">
+                                <Check className="w-4 h-4" /> Save Details
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
 
         const CorsHelpModal = ({ onClose }) => (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -159,19 +335,17 @@
                     
                     if (!config || !config.apiKey || !config.projectId) throw new Error("Invalid Config: Missing 'apiKey' or 'projectId'.");
 
-                    // TEST CONNECTION
+                    // TEST CONNECTION (Using test app to verify before saving)
                     try {
                         const tempApp = initializeApp(config, "testConnectionApp");
                         const tempAuth = getAuth(tempApp);
                         await signInAnonymously(tempAuth);
                         deleteApp(tempApp); 
                     } catch (connErr) {
-                        if (connErr.code === 'auth/configuration-not-found' || connErr.code === 'auth/admin-restricted-operation') {
-                            throw new Error("Connection Refused: 'Anonymous' sign-in is disabled in your Firebase Console.");
-                        } else if (connErr.code === 'auth/invalid-api-key') {
+                         // Only warn, don't block if anonymous auth is simply disabled but API key is valid
+                        console.warn("Test connection warning:", connErr);
+                        if (connErr.code === 'auth/invalid-api-key') {
                             throw new Error("Invalid API Key. Please check your project settings.");
-                        } else {
-                            throw new Error("Connection failed: " + connErr.message);
                         }
                     }
 
@@ -187,11 +361,6 @@
             const handleOffline = () => {
                 localStorage.setItem('calcBinder_firebaseConfig', 'offline');
                 onSave();
-            };
-
-            const handleClear = () => {
-                localStorage.removeItem('calcBinder_firebaseConfig');
-                window.location.reload();
             };
 
             return (
@@ -239,6 +408,7 @@
             const [syncStatus, setSyncStatus] = useState(isOfflineMode ? 'offline' : 'connecting'); 
             const [authError, setAuthError] = useState(null);
             const [showCorsHelp, setShowCorsHelp] = useState(false);
+            const [editingFile, setEditingFile] = useState(null); // File object for modal
             
             // --- Multi-Project State ---
             const [projects, setProjects] = useState([]);
@@ -256,7 +426,7 @@
                 client: "Client Name",
                 date: new Date().toISOString().split('T')[0],
                 description: "Structural analysis and design of primary framing members.",
-                docType: "CALCULATION PACKAGE" // Default Document Type
+                docType: "CALCULATION PACKAGE" 
             });
 
             const [logo, setLogo] = useState(null); 
@@ -272,10 +442,14 @@
                 const loadPdfLib = async () => {
                     if (window.PDFLib) { setPdfLibLoaded(true); return; }
                     try {
-                        const script = document.createElement('script');
-                        script.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
-                        script.onload = () => setPdfLibLoaded(true);
-                        document.body.appendChild(script);
+                        // PDFLib is loaded via script tag, wait for window check
+                        const check = setInterval(() => {
+                            if(window.PDFLib) {
+                                setPdfLibLoaded(true);
+                                clearInterval(check);
+                            }
+                        }, 500);
+                        setTimeout(() => clearInterval(check), 5000);
                     } catch (err) { console.error(err); }
                 };
                 loadPdfLib();
@@ -289,19 +463,37 @@
                     return;
                 }
 
+                // Auth Logic incorporating Custom Tokens (for Canvas) and Anonymous fallback
+                const initAuth = async () => {
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                         setSyncStatus('offline');
+                         setAuthError("Auth Failed: " + error.message);
+                    }
+                };
+                initAuth();
+
                 const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
                     if (currentUser) {
                         setUser(currentUser);
                         setSyncStatus('synced');
                         setAuthError(null);
                         
-                        // Listen for Projects List
-                        const projectsQuery = query(collection(db, "artifacts", appId, "public", "data", "projects"), orderBy("lastModified", "desc"));
-                        const unsubProjects = onSnapshot(projectsQuery, (snapshot) => {
+                        // Strict Rule: No complex queries. Fetch all projects then sort in memory if needed.
+                        const projectsRef = collection(db, "artifacts", appId, "public", "data", "projects");
+                        
+                        // Using simple query
+                        const unsubProjects = onSnapshot(projectsRef, (snapshot) => {
                             const projList = snapshot.docs.map(doc => ({
                                 id: doc.id,
                                 ...doc.data()
-                            }));
+                            })).sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified)); // Sort in memory
+
                             setProjects(projList);
                             if (projList.length > 0 && !activeProjectId) {
                                 setActiveProjectId(projList[0].id);
@@ -309,17 +501,9 @@
                                 handleCreateProject(currentUser.uid, "New Shared Project");
                             }
                         }, (error) => {
-                            console.error("Firestore Error:", error);
                             setAuthError("Database Access Denied. Check Rules.");
                         });
                         return () => unsubProjects();
-                    } else {
-                        try {
-                            await signInAnonymously(auth);
-                        } catch (error) {
-                            setSyncStatus('offline');
-                            setAuthError("Auth Failed: " + error.code);
-                        }
                     }
                 });
                 return () => unsubscribe();
@@ -352,6 +536,8 @@
                         setSyncStatus('synced');
                         setRefreshStats(prev => prev + 1); 
                     }
+                }, (err) => {
+                    console.error("Project fetch error", err);
                 });
                 return () => unsubDoc();
             }, [user, activeProjectId]);
@@ -361,7 +547,9 @@
                 if (isOfflineMode || !user) return;
                 const calculateUsage = async () => {
                     try {
-                        const filesRef = ref(storage, `shared/files`);
+                        const filesRef = ref(storage, `artifacts/${appId}/public/data/files`);
+                        // Note: listAll only works if rules allow list. 
+                        // If this fails, we just don't show stats.
                         const listResult = await listAll(filesRef);
                         let totalBytes = 0;
                         let count = 0;
@@ -369,7 +557,9 @@
                         const metaResults = await Promise.all(metadataPromises);
                         metaResults.forEach(meta => { totalBytes += meta.size; count++; });
                         setStorageStats({ usedBytes: totalBytes, fileCount: count });
-                    } catch (e) { console.error("Failed to calc storage stats", e); }
+                    } catch (e) { 
+                        // Silent fail for stats
+                    }
                 };
                 calculateUsage();
             }, [user, refreshStats, syncStatus]);
@@ -456,8 +646,8 @@
 
             const uploadFileToFirebase = async (file) => {
                 if (isOfflineMode || !user) return null;
-                // Return structured object: { url, path }
-                const storagePath = `shared/files/${crypto.randomUUID()}-${file.name}`;
+                // Path Rule compliance: /artifacts/{appId}/public/data/files
+                const storagePath = `artifacts/${appId}/public/data/files/${crypto.randomUUID()}-${file.name}`;
                 const fileRef = ref(storage, storagePath);
                 await uploadBytes(fileRef, file);
                 setRefreshStats(prev => prev + 1); 
@@ -500,14 +690,16 @@
                         id: crypto.randomUUID(),
                         name: file.name,
                         downloadURL: downloadInfo.url,
-                        storagePath: downloadInfo.path, // Store the explicit path
+                        storagePath: downloadInfo.path, 
                         fileObj: file, 
                         sectionTitle: file.name.replace('.pdf', '').replace(/_/g, ' '), 
                         sectionSubtitle: '',
                         calcsBy: '', checkedBy: '', revision: '0', uploadDate: currentDate,
                         pageCount, rawPages,
                         size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-                        depth: 0, isPlaceholder: false
+                        depth: 0, isPlaceholder: false,
+                        objective: "",
+                        program: ""
                     }]);
                 }
                 if (!isOfflineMode) setSyncStatus('synced');
@@ -569,16 +761,31 @@
                 if (!isOfflineMode) setSyncStatus('synced');
             };
 
-            // ... (Other handlers) ...
             const handleAddPlaceholder = () => {
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                 setFiles(prev => [...prev, {
                     id: crypto.randomUUID(), downloadURL: null, fileObj: null,
                     name: "Placeholder Section", sectionTitle: "New Placeholder", sectionSubtitle: "",
                     calcsBy: "", checkedBy: "", revision: "0", uploadDate: currentDate,
-                    pageCount: 5, rawPages: 5, size: "N/A", depth: 0, isPlaceholder: true
+                    pageCount: 5, rawPages: 5, size: "N/A", depth: 0, isPlaceholder: true,
+                    objective: "", program: ""
                 }]);
             };
+            
+            // --- NEW: Handle Adding Section Header ---
+            const handleAddHeader = () => {
+                const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                setFiles(prev => [...prev, {
+                    id: crypto.randomUUID(), downloadURL: null, fileObj: null,
+                    name: "Section Header", sectionTitle: "New Section", sectionSubtitle: "",
+                    calcsBy: "", checkedBy: "", revision: "0", uploadDate: currentDate,
+                    pageCount: 0, rawPages: 0, size: "N/A", depth: 0, 
+                    isPlaceholder: false, 
+                    isHeader: true, // Distinct flag
+                    objective: "", program: ""
+                }]);
+            };
+
             const handleReplacePlaceholder = async (e, id) => {
                 const file = e.target.files[0];
                 if(!file) return;
@@ -613,6 +820,15 @@
                     newFiles[index].depth = newDepth;
                     setFiles(newFiles);
                 }
+            };
+            
+            const handleLogout = () => {
+                localStorage.removeItem('calcBinder_firebaseConfig');
+                window.location.reload();
+            };
+            
+            const handleUpdateFileDetails = (fileId, newDetails) => {
+                setFiles(prev => prev.map(f => f.id === fileId ? { ...f, ...newDetails } : f));
             };
 
             const numberedFiles = useMemo(() => {
@@ -664,15 +880,7 @@
                 if (!text) return;
                 const { width } = page.getSize();
                 const safeWidth = maxWidth || (width - 100);
-                const words = text.split(' ');
-                let lines = [], currentLine = words[0];
-                for (let i = 1; i < words.length; i++) {
-                    const word = words[i];
-                    const width = font.widthOfTextAtSize(`${currentLine} ${word}`, size);
-                    if (width < safeWidth) currentLine += ` ${word}`;
-                    else { lines.push(currentLine); currentLine = word; }
-                }
-                lines.push(currentLine);
+                const lines = getWrappedLines(text, size, font, safeWidth);
                 const lineHeight = size * 1.3;
                 const centerIndex = (lines.length - 1) / 2;
                 lines.forEach((line, i) => {
@@ -685,6 +893,111 @@
                 });
             };
 
+            // --- FORMAL DIVIDER GENERATION ---
+            const drawFormalDivider = (page, fileData, projectMeta, embeddedLogo, fonts, rgb) => {
+                const { width, height } = page.getSize();
+                const { fontBold, fontRegular } = fonts;
+                const margin = 40;
+                const contentWidth = width - (margin * 2);
+                
+                // Header Grid (Project Info)
+                const headerH = 80;
+                const headerY = height - margin - headerH;
+                page.drawLine({ start: { x: margin, y: headerY }, end: { x: width - margin, y: headerY }, thickness: 1, color: rgb(0,0,0) });
+
+                // Project Title (Top Left)
+                page.drawText("PROJECT:", { x: margin + 10, y: height - margin - 20, size: 8, font: fontBold, color: rgb(0.5,0.5,0.5) });
+                drawWrappedText(page, projectMeta.title, height - margin - 55, 14, fontBold, rgb, [0,0,0], contentWidth - 200, 'left');
+
+                // Logo placement
+                if (embeddedLogo) {
+                    const logoH = 40;
+                    const scale = logoH / embeddedLogo.height;
+                    const logoW = embeddedLogo.width * scale;
+                    page.drawImage(embeddedLogo, { x: width - margin - logoW - 10, y: height - margin - 10 - logoH, width: logoW, height: logoH });
+                }
+
+                // Section Info Block
+                const titleY = headerY - 60;
+                drawWrappedText(page, `SECTION ${fileData.sectionLabel}`, titleY, 24, fontBold, rgb, [0,0,0]);
+                drawWrappedText(page, fileData.sectionTitle || "Untitled Section", titleY - 40, 18, fontBold, rgb, [0,0,0]);
+                if (fileData.sectionSubtitle) {
+                    drawWrappedText(page, fileData.sectionSubtitle, titleY - 70, 14, fontRegular, rgb, [0.3,0.3,0.3]);
+                }
+
+                // Body Content (Grid simulation)
+                const bodyStart = titleY - 120;
+                let cursorY = bodyStart;
+
+                // Helper to draw labelled block
+                const drawBlock = (label, text) => {
+                    if (!text) return;
+                    page.drawText(label, { x: margin + 20, y: cursorY, size: 9, font: fontBold, color: rgb(0.5,0.5,0.5) });
+                    const lines = getWrappedLines(text, 10, fontRegular, contentWidth - 40);
+                    lines.forEach((line, i) => {
+                        page.drawText(line, { x: margin + 20, y: cursorY - 15 - (i*12), size: 10, font: fontRegular, color: rgb(0,0,0) });
+                    });
+                    cursorY -= (lines.length * 12) + 35; 
+                };
+
+                drawBlock("OBJECTIVE / SCOPE:", fileData.objective);
+                drawBlock("COMPUTER PROGRAM:", fileData.program);
+
+                // Footer Sign-off (Standard Engineering Block)
+                const boxBottom = margin;
+                const boxHeight = 65;
+                const boxTop = boxBottom + boxHeight;
+
+                // Outer Box
+                page.drawRectangle({
+                    x: margin,
+                    y: boxBottom,
+                    width: contentWidth,
+                    height: boxHeight,
+                    borderColor: rgb(0, 0, 0),
+                    borderWidth: 1,
+                });
+
+                // --- CHANGED TO 4 COLUMNS ---
+                const colCount = 4;
+                const colW = contentWidth / colCount;
+
+                // Vertical Separators & Text
+                for (let i = 0; i < colCount; i++) {
+                    // Line (except first)
+                    if (i > 0) {
+                        const lineX = margin + (i * colW);
+                        page.drawLine({
+                            start: { x: lineX, y: boxBottom },
+                            end: { x: lineX, y: boxTop },
+                            thickness: 1,
+                            color: rgb(0, 0, 0)
+                        });
+                    }
+                }
+                
+                const drawFooterCell = (index, label, name, date) => {
+                    const cellX = margin + (index * colW) + 4; // padding
+                    // Label (Top Left of cell)
+                    page.drawText(label, { x: cellX, y: boxTop - 12, size: 6, font: fontBold, color: rgb(0.5, 0.5, 0.5) });
+                    // Name (Center-ish)
+                    if (name) page.drawText(name, { x: cellX, y: boxTop - 30, size: 9, font: fontRegular, color: rgb(0, 0, 0) });
+                    // Date (Bottom)
+                    if (date) page.drawText(date, { x: cellX, y: boxBottom + 8, size: 7, font: fontRegular, color: rgb(0.3, 0.3, 0.3) });
+                };
+
+                drawFooterCell(0, "DESIGNED BY", fileData.designedBy, fileData.designedDate);
+                drawFooterCell(1, "CHECKED BY", fileData.checkedBy, fileData.checkedDate);
+                // --- CONSOLIDATED FIELD ---
+                drawFooterCell(2, "QC REVIEW BY", fileData.qcReviewBy, fileData.qcReviewDate); 
+                drawFooterCell(3, "APPROVED BY", fileData.approvedBy, fileData.approvedDate);
+                
+                if (fileData.revision) {
+                     page.drawText(`REV: ${fileData.revision}`, { x: width - margin - 150, y: titleY + 30, size: 10, font: fontBold, color: rgb(0,0,0) });
+                }
+            };
+
+
             const generateBinder = async () => {
                 setIsProcessing(true);
                 try {
@@ -693,6 +1006,7 @@
                     const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
                     const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
                     const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
+                    const fonts = { fontBold, fontRegular, fontOblique };
 
                     const parsedScale = parseFloat(logoScale) || 1.0;
 
@@ -710,13 +1024,16 @@
                                     embeddedLogo = isPng ? await mergedPdf.embedJpg(logoBytes) : await mergedPdf.embedPng(logoBytes);
                                 } catch (e2) {
                                     console.error("Logo embed error", e2);
-                                    alert("Warning: Logo image format not supported or corrupted.");
                                 }
                             }
                         } catch(e) { console.error("Logo fetch failed", e); }
                     }
 
-                    const coverPage = mergedPdf.addPage();
+                    // --- PAGE SIZE (LETTER) ---
+                    const LETTER_SIZE = [612, 792];
+
+                    // --- COVER SHEET ---
+                    const coverPage = mergedPdf.addPage(LETTER_SIZE);
                     const { width, height } = coverPage.getSize();
                     if (embeddedLogo) {
                         const maxWidth = 250;
@@ -726,183 +1043,88 @@
                     }
                     drawWrappedText(coverPage, projectMeta.title.toUpperCase(), height - 250, 24, fontBold, rgb, [0,0,0], width - 100);
                     drawWrappedText(coverPage, `PROJECT NO: ${projectMeta.number}`, height - 300, 14, fontRegular, rgb, [0.4,0.4,0.4], width - 100);
-                    // Use configurable Document Type
                     drawWrappedText(coverPage, (projectMeta.docType || "CALCULATION PACKAGE").toUpperCase(), height / 2, 18, fontBold, rgb, [0,0,0], width - 100);
-                    
                     drawWrappedText(coverPage, "PREPARED FOR:", height - 550, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
                     drawWrappedText(coverPage, projectMeta.client, height - 570, 16, fontRegular, rgb, [0,0,0], width - 100);
                     drawWrappedText(coverPage, "DATE:", height - 620, 10, fontBold, rgb, [0.5,0.5,0.5], width - 100);
                     drawWrappedText(coverPage, projectMeta.date, height - 640, 14, fontRegular, rgb, [0,0,0], width - 100);
                     if (projectMeta.description) drawWrappedText(coverPage, projectMeta.description, 100, 10, fontOblique, rgb, [0.3,0.3,0.3], width - 150);
 
-                    // --- Measure TOC ---
-                    const tocLineHeight = 14; 
-                    const tocStartY = height - 120;
-                    const tocBottomMargin = 50;
-                    let currentTocPage = 1;
-                    let currentY = tocStartY;
-                    
-                    const tocLayout = numberedFiles.map(file => {
-                         const indent = file.depth === 0 ? 50 : file.depth === 1 ? 70 : 90;
-                         const font = file.depth === 0 ? fontBold : fontRegular;
-                         const fontSize = file.depth === 0 ? 12 : 11;
-                         
-                         // Increased margin for cleaner separation
-                         const maxWidth = width - (indent + 60) - 80;
-                         
-                         const title = file.sectionTitle || "Untitled";
-                         const lines = getWrappedLines(title, fontSize, font, maxWidth);
-                         const entryHeight = (lines.length * fontSize * 1.2) + 10;
-                         
-                         if (currentY - entryHeight < tocBottomMargin) {
-                             currentTocPage++;
-                             currentY = tocStartY;
-                         }
-                         currentY -= entryHeight;
-                         return { ...file, lines, entryHeight };
-                    });
-                    
-                    const tocPageCount = currentTocPage;
-                    let nextContentPage = 1 + tocPageCount; // Content starts after TOC
-                    
-                    // Assign start pages to files
-                    for (let i = 0; i < tocLayout.length; i++) {
-                        const f = tocLayout[i];
+                    // --- TOC ---
+                    const fileAnalysis = [];
+                    const entriesPerPage = 25; 
+                    const tocPageCount = Math.ceil(numberedFiles.length / entriesPerPage) || 1;
+                    let runningPageNumber = 1 + tocPageCount + 1; 
+                    for (const f of numberedFiles) {
                         const pCount = f.rawPages || 1; 
-                        f.startPage = nextContentPage + 1; // +1 because the divider is the first page of the section
-                        nextContentPage += 1 + pCount;
+                        fileAnalysis.push({ ...f, startPage: runningPageNumber + 1 });
+                        // Header pages (dividers) still count as a page in numbering logic if we include them
+                        runningPageNumber += f.isHeader ? 1 : (1 + pCount);
                     }
 
-                    // --- Draw TOC ---
-                    let tocY = tocStartY;
-                    let tocPageRef = mergedPdf.addPage();
-                    drawWrappedText(tocPageRef, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
-                    
-                    const addNewTocPage = () => {
-                        tocPageRef = mergedPdf.addPage();
-                        tocY = tocStartY;
-                        drawWrappedText(tocPageRef, "TABLE OF CONTENTS (Cont.)", height - 60, 24, fontBold, rgb, [0,0,0]);
-                    };
-                    
-                    tocLayout.forEach((item) => {
-                         if (tocY - item.entryHeight < tocBottomMargin) addNewTocPage();
-                         
-                         const indent = item.depth === 0 ? 50 : item.depth === 1 ? 70 : 90;
-                         const font = item.depth === 0 ? fontBold : fontRegular;
-                         const fontSize = item.depth === 0 ? 12 : 11;
-                         const lineHeight = fontSize * 1.2;
-                         
-                         tocPageRef.drawText(item.sectionLabel, { x: indent, y: tocY, size: fontSize, font });
-                         
-                         const pageNumStr = item.startPage.toString();
-                         const pageNumWidth = font.widthOfTextAtSize(pageNumStr, fontSize);
-                         tocPageRef.drawText(pageNumStr, { x: width - 50 - pageNumWidth, y: tocY, size: fontSize, font });
-                         
-                         item.lines.forEach((line, lineIdx) => {
-                             tocPageRef.drawText(line, { 
-                                 x: indent + 60, 
-                                 y: tocY - (lineIdx * lineHeight), 
-                                 size: fontSize, 
-                                 font 
-                             });
-                         });
-                         tocY -= item.entryHeight;
-                    });
-
-                    // --- Dividers & Content ---
-                    for (const f of numberedFiles) {
-                        const divPage = mergedPdf.addPage();
-                        const { width: divW, height: divH } = divPage.getSize();
-                        
-                        const maxWidth = divW - 100;
-                        const divGap = 24;
-                        let tSize = 18, lSize = 14, subSize = 12;
-                        let color = [0,0,0];
-                        if (f.depth === 1) { tSize = 16; lSize = 12; subSize = 10; color = [0.3,0.3,0.3]; }
-                        else if (f.depth === 2) { tSize = 14; lSize = 10; subSize = 8; color = [0.4,0.4,0.4]; }
-
-                        const hLabel = measureWrappedTextHeight(`SECTION ${f.sectionLabel}`, lSize, fontBold, maxWidth);
-                        const hTitle = f.sectionTitle ? measureWrappedTextHeight(f.sectionTitle, tSize, fontBold, maxWidth) : 0;
-                        const hSub = f.sectionSubtitle ? measureWrappedTextHeight(f.sectionSubtitle, subSize, fontRegular, maxWidth) : 0;
-
-                        let totalH = hLabel;
-                        if (hTitle) totalH += divGap + hTitle;
-                        if (hSub) totalH += divGap + hSub;
-
-                        let currY = (divH / 2) + (totalH / 2);
-
-                        const labelY = currY - (hLabel / 2);
-                        drawWrappedText(divPage, `SECTION ${f.sectionLabel}`, labelY, lSize, fontBold, rgb, [0.5,0.5,0.5], maxWidth);
-                        currY -= hLabel;
-
-                        if (hTitle) {
-                            currY -= divGap;
-                            const titleY = currY - (hTitle / 2);
-                            drawWrappedText(divPage, f.sectionTitle, titleY, tSize, fontBold, rgb, color, maxWidth);
-                            currY -= hTitle;
-                        }
-
-                        if (hSub) {
-                            currY -= divGap;
-                            const subY = currY - (hSub / 2);
-                            drawWrappedText(divPage, f.sectionSubtitle, subY, subSize, fontRegular, rgb, [0.4,0.4,0.4], maxWidth);
-                        }
-
-                        if (embeddedLogo) {
-                            const maxWidthLogo = 100;
-                            const baseScaleLogo = maxWidthLogo / embeddedLogo.width;
-                            const effectiveScaleLogo = (baseScaleLogo > 1 ? 1 : baseScaleLogo) * parsedScale;
-                            const divLogoDims = embeddedLogo.scale(effectiveScaleLogo);
-                            divPage.drawImage(embeddedLogo, { 
-                                x: divW - 50 - divLogoDims.width, 
-                                y: divH - 50 - divLogoDims.height, 
-                                width: divLogoDims.width, 
-                                height: divLogoDims.height 
+                    for (let p = 0; p < tocPageCount; p++) {
+                        const tocPage = mergedPdf.addPage(LETTER_SIZE);
+                        drawWrappedText(tocPage, "TABLE OF CONTENTS", height - 60, 24, fontBold, rgb, [0,0,0]);
+                        const startIdx = p * entriesPerPage;
+                        const endIdx = Math.min(startIdx + entriesPerPage, fileAnalysis.length);
+                        let yPos = height - 120;
+                        for (let i = startIdx; i < endIdx; i++) {
+                            const item = fileAnalysis[i];
+                            const indent = item.depth === 0 ? 50 : item.depth === 1 ? 70 : 90;
+                            const font = item.depth === 0 ? fontBold : fontRegular;
+                            const fontSize = item.depth === 0 ? 12 : 11;
+                            const maxWidth = width - (indent + 60) - 80;
+                            const title = item.sectionTitle || "Untitled";
+                            
+                            tocPage.drawText(item.sectionLabel, { x: indent, y: yPos, size: fontSize, font });
+                            
+                            const lines = getWrappedLines(title, fontSize, font, maxWidth);
+                            lines.forEach((line, lx) => {
+                                tocPage.drawText(line, { x: indent + 60, y: yPos - (lx*14), size: fontSize, font });
                             });
+                            
+                            const pageNumStr = item.startPage.toString();
+                            tocPage.drawText(pageNumStr, { x: width - 50 - font.widthOfTextAtSize(pageNumStr, fontSize), y: yPos, size: fontSize, font });
+                            
+                            const entryHeight = (lines.length * 14) + 10;
+                            yPos -= entryHeight;
                         }
+                    }
 
-                        const metaText = `Designed: ${f.calcsBy||'-'}  Checked: ${f.checkedBy||'-'}  Rev: ${f.revision||'-'}  Date: ${f.uploadDate}`;
-                        drawWrappedText(divPage, metaText, 50, 10, fontRegular, rgb, [0.4,0.4,0.4]);
+                    // --- SECTIONS ---
+                    for (const f of numberedFiles) {
+                        // NEW: FORMAL DIVIDER
+                        const divPage = mergedPdf.addPage(LETTER_SIZE);
+                        drawFormalDivider(divPage, f, projectMeta, embeddedLogo, fonts, rgb);
+
+                        // If it's a Header, we stop here for this item (Divider Only)
+                        if (f.isHeader) continue;
 
                         if (f.isPlaceholder) {
                             for(let k=0; k < f.rawPages; k++) {
-                                const p = mergedPdf.addPage();
+                                const p = mergedPdf.addPage(LETTER_SIZE);
                                 drawWrappedText(p, `PLACEHOLDER FOR SECTION ${f.sectionLabel}`, p.getHeight()/2, 18, fontBold, rgb, [0.7,0.7,0.7]);
                             }
                         } else {
                             try {
                                 let fileBytes = null;
-                                if (f.fileObj) {
-                                    fileBytes = await f.fileObj.arrayBuffer();
-                                } else if (f.storagePath) {
-                                    // 1. Try SDK Download (Authenticated)
-                                    const r = ref(storage, f.storagePath);
-                                    fileBytes = await getBytes(r);
-                                } else if (f.downloadURL) {
-                                    // 2. Fallback fetch (May hit CORS)
-                                    const res = await fetch(f.downloadURL);
-                                    if (!res.ok) throw new Error("Fetch failed");
-                                    fileBytes = await res.arrayBuffer();
-                                }
+                                if (f.fileObj) fileBytes = await f.fileObj.arrayBuffer();
+                                else if (f.storagePath) { const r = ref(storage, f.storagePath); fileBytes = await getBytes(r); }
+                                else if (f.downloadURL) { const res = await fetch(f.downloadURL); fileBytes = await res.arrayBuffer(); }
 
                                 if (fileBytes) {
                                     const srcDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
                                     const copied = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
                                     copied.forEach(p => mergedPdf.addPage(p));
-                                } else {
-                                    throw new Error("No data source found");
                                 }
                             } catch (e) {
-                                console.error(`Failed to load ${f.name}`, e);
-                                const errP = mergedPdf.addPage();
+                                const errP = mergedPdf.addPage(LETTER_SIZE);
                                 errP.drawText(`Error loading file: ${f.name}`, { x: 50, y: 700 });
-                                errP.drawText(`Reason: ${e.message}`, { x: 50, y: 680, size: 10, color: rgb(1,0,0) });
-                                errP.drawText(`This file could not be downloaded from the cloud.`, { x: 50, y: 660, size: 10 });
-                                errP.drawText(`Please enable CORS on your bucket or click 'Replace' to re-upload locally.`, { x: 50, y: 640, size: 10 });
                             }
                         }
                     }
 
+                    // --- PAGE NUMBERS ---
                     const totalPages = mergedPdf.getPageCount();
                     for (let i = 1; i < totalPages; i++) {
                         const p = mergedPdf.getPage(i);
@@ -926,22 +1148,21 @@
                 finally { setIsProcessing(false); }
             };
 
-            const handleLogout = () => { localStorage.removeItem('calcBinder_firebaseConfig'); window.location.reload(); };
             const getIndent = (d) => d === 0 ? '' : d === 1 ? 'pl-8 border-l-4 border-slate-200' : 'pl-16 border-l-4 border-slate-200 ml-4';
-
-            // Helper for bytes to MB
-            const formatBytes = (bytes, decimals = 2) => {
-                if (!+bytes) return '0 Bytes';
-                const k = 1024;
-                const dm = decimals < 0 ? 0 : decimals;
-                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-                const i = Math.floor(Math.log(bytes) / Math.log(k));
-                return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
-            }
+            const formatBytes = (bytes, decimals = 2) => { if (!+bytes) return '0 Bytes'; const k = 1024; const dm = decimals < 0 ? 0 : decimals; const sizes = ['Bytes', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`; };
 
             return (
                 <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-8">
+                    {editingFile && (
+                        <CoverSheetModal 
+                            file={editingFile} 
+                            projectMeta={projectMeta}
+                            onClose={() => setEditingFile(null)}
+                            onSave={handleUpdateFileDetails}
+                        />
+                    )}
                     {showCorsHelp && <CorsHelpModal onClose={() => setShowCorsHelp(false)} />}
+                    
                     <div className="max-w-[95%] 2xl:max-w-[1600px] mx-auto pt-4">
                         {/* Header */}
                         <div className="flex justify-between items-end mb-8 border-b border-slate-300 pb-4">
@@ -950,40 +1171,11 @@
                                 <p className="text-slate-500 mt-1">Combine disparate engineering outputs into a single submission.</p>
                             </div>
                             <div className="flex items-center gap-4">
-                                <button 
-                                    onClick={() => setShowCorsHelp(true)} 
-                                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"
-                                >
-                                    <Globe className="w-4 h-4" /> CORS Help
-                                </button>
-
-                                {/* Storage Usage Indicator */}
-                                {syncStatus === 'synced' && (
-                                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 border border-slate-200 text-slate-600" title={`Total Cloud Storage Used: ${formatBytes(storageStats.usedBytes)}`}>
-                                        <Database className="w-4 h-4 text-slate-400" />
-                                        <div className="flex flex-col items-end leading-none">
-                                            <span>{formatBytes(storageStats.usedBytes)}</span>
-                                            <div className="w-16 h-1 bg-slate-200 rounded-full mt-0.5 overflow-hidden">
-                                                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min((storageStats.usedBytes / (1024*1024*1024))*100, 100)}%` }}></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
+                                <button onClick={() => setShowCorsHelp(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors"><Globe className="w-4 h-4" /> CORS Help</button>
+                                {syncStatus === 'synced' && <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 border border-slate-200 text-slate-600" title={`Total Cloud Storage Used: ${formatBytes(storageStats.usedBytes)}`}><Database className="w-4 h-4 text-slate-400" /><span>{formatBytes(storageStats.usedBytes)}</span></div>}
                                 {authError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 px-3 py-1.5 rounded-full flex items-center gap-2 animate-pulse"><AlertTriangle className="w-4 h-4" /><span>{authError}</span></div>}
-                                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${syncStatus === 'synced' ? 'bg-green-50 text-green-700 border-green-200' : syncStatus === 'syncing' ? 'bg-blue-50 text-blue-700 border-blue-200' : syncStatus === 'error' ? 'bg-red-50 text-red-700 border-red-200' : syncStatus === 'offline' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
-                                    {syncStatus === 'synced' && <Check className="w-4 h-4" />}
-                                    {syncStatus === 'syncing' && <RefreshCw className="w-4 h-4 animate-spin" />}
-                                    {syncStatus === 'error' && <AlertCircle className="w-4 h-4" />}
-                                    {syncStatus === 'connecting' && <Cloud className="w-4 h-4" />}
-                                    {syncStatus === 'offline' && <WifiOff className="w-4 h-4" />}
-                                    <span>
-                                        {syncStatus === 'synced' ? 'Saved to Cloud' : 
-                                         syncStatus === 'syncing' ? 'Syncing...' : 
-                                         syncStatus === 'error' ? 'Sync Error' : 
-                                         syncStatus === 'offline' ? 'Offline Mode' : 
-                                         'Connecting...'}
-                                    </span>
+                                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${syncStatus === 'synced' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                                    {syncStatus === 'synced' ? <Check className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}<span>{syncStatus === 'synced' ? 'Saved' : 'Connecting...'}</span>
                                 </div>
                                 <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Disconnect & Clear Config"><RotateCcw className="w-5 h-5" /></button>
                             </div>
@@ -998,26 +1190,14 @@
                                 </div>
                                 <div className="overflow-y-auto flex-1 p-2 space-y-1">
                                     {projects.map(p => (
-                                        <div 
-                                            key={p.id} 
-                                            onClick={() => setActiveProjectId(p.id)}
-                                            className={`p-3 rounded-md text-sm cursor-pointer transition-all flex justify-between group ${activeProjectId === p.id ? 'bg-blue-50 border-blue-200 border text-blue-700' : 'hover:bg-slate-50 text-slate-600 border border-transparent'}`}
-                                        >
+                                        <div key={p.id} onClick={() => setActiveProjectId(p.id)} className={`p-3 rounded-md text-sm cursor-pointer transition-all flex justify-between group ${activeProjectId === p.id ? 'bg-blue-50 border-blue-200 border text-blue-700' : 'hover:bg-slate-50 text-slate-600 border border-transparent'}`}>
                                             <div className="truncate pr-2">
-                                                <div className="font-medium truncate">
-                                                    {p.id === activeProjectId ? (projectMeta.title || "Untitled Project") : (p.projectMeta?.title || "Untitled Project")}
-                                                </div>
+                                                <div className="font-medium truncate">{p.id === activeProjectId ? (projectMeta.title || "Untitled") : (p.projectMeta?.title || "Untitled")}</div>
                                                 <div className="text-[10px] opacity-70">{new Date(p.lastModified).toLocaleDateString()}</div>
                                             </div>
-                                            <button 
-                                                onClick={(e) => handleDeleteProject(p.id, e)}
-                                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 rounded"
-                                            >
-                                                <Trash2 className="w-3 h-3" />
-                                            </button>
+                                            <button onClick={(e) => handleDeleteProject(p.id, e)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 rounded"><Trash2 className="w-3 h-3" /></button>
                                         </div>
                                     ))}
-                                    {projects.length === 0 && <div className="p-4 text-center text-xs text-slate-400">No projects found. Create one to get started.</div>}
                                 </div>
                             </div>
 
@@ -1045,17 +1225,7 @@
                                                 <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Date</label><input type="date" value={projectMeta.date} onChange={(e) => updateMeta('date', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
                                                 <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><User className="w-3 h-3" /> Client Name</label><input type="text" value={projectMeta.client} onChange={(e) => updateMeta('client', e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
                                                 <div className="md:col-span-2"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><AlignLeft className="w-3 h-3" /> Description</label><textarea value={projectMeta.description} onChange={(e) => updateMeta('description', e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none resize-none" /></div>
-                                                {/* New Document Type Input */}
-                                                <div className="md:col-span-2 mt-2 pt-2 border-t border-slate-100">
-                                                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Book className="w-3 h-3" /> Document Type</label>
-                                                    <input 
-                                                        type="text" 
-                                                        value={projectMeta.docType || "CALCULATION PACKAGE"} // Default Fallback
-                                                        onChange={(e) => updateMeta('docType', e.target.value)} 
-                                                        className="w-full px-3 py-2 text-sm font-medium text-slate-700 bg-slate-50 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-                                                        placeholder="e.g. CALCULATION PACKAGE"
-                                                    />
-                                                </div>
+                                                <div className="md:col-span-2 mt-2 pt-2 border-t border-slate-100"><label className="block text-xs font-semibold text-slate-500 uppercase mb-1 flex items-center gap-1"><Book className="w-3 h-3" /> Document Type</label><input type="text" value={projectMeta.docType || "CALCULATION PACKAGE"} onChange={(e) => updateMeta('docType', e.target.value)} className="w-full px-3 py-2 text-sm font-medium text-slate-700 bg-slate-50 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" /></div>
                                             </div>
                                         </div>
                                     </div>
@@ -1066,8 +1236,13 @@
                                             <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
                                             <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" /><p className="text-lg font-medium text-slate-700">Drop PDFs here to Upload</p><p className="text-sm text-slate-500">{syncStatus === 'offline' ? 'Local memory only (Offline Mode)' : 'Automatically saved to Cloud'}</p>
                                         </div>
-                                        <div className="flex-none w-48 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group" onClick={handleAddPlaceholder}>
-                                            <FileQuestion className="w-8 h-8 text-slate-400 group-hover:text-emerald-500 mb-2 transition-colors" /><p className="text-sm font-medium text-slate-600 group-hover:text-emerald-600">Add Placeholder</p>
+                                        <div className="flex-col gap-2 flex">
+                                            <div className="w-48 flex-1 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group" onClick={handleAddPlaceholder}>
+                                                <FileQuestion className="w-6 h-6 text-slate-400 group-hover:text-emerald-500 mb-1 transition-colors" /><p className="text-xs font-medium text-slate-600 group-hover:text-emerald-600">Add Placeholder</p>
+                                            </div>
+                                            <div className="w-48 flex-1 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-violet-50 hover:border-violet-400 transition-colors cursor-pointer group" onClick={handleAddHeader}>
+                                                <Type className="w-6 h-6 text-slate-400 group-hover:text-violet-500 mb-1 transition-colors" /><p className="text-xs font-medium text-slate-600 group-hover:text-violet-600">Add Section Header</p>
+                                            </div>
                                         </div>
                                     </div>
 
@@ -1075,7 +1250,7 @@
                                     <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
                                         <ul className="divide-y divide-slate-100">
                                             {numberedFiles.map((file, index) => (
-                                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50'}`}>
+                                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isHeader ? 'bg-slate-100 border-l-4 border-slate-400' : (file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50')}`}>
                                                     <div className="flex flex-col items-center justify-center gap-2 mr-2">
                                                         <div className="flex flex-col"><button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button><button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button></div>
                                                         <div className="flex gap-1"><button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowLeft className="w-3 h-3" /></button><button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowRight className="w-3 h-3" /></button></div>
@@ -1084,20 +1259,28 @@
                                                     <div className={`flex-1 space-y-3 transition-all ${getIndent(file.depth)}`}>
                                                         <div className="flex items-center justify-between">
                                                             <input type="text" value={file.sectionTitle} onChange={(e) => updateFileField(file.id, 'sectionTitle', e.target.value)} className="w-full font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" />
+                                                            {/* Cover Sheet Button */}
+                                                            <button 
+                                                                onClick={() => setEditingFile(file)}
+                                                                className="ml-2 flex items-center gap-1 px-2 py-1 bg-white border border-slate-300 rounded hover:bg-blue-50 hover:border-blue-300 text-slate-500 hover:text-blue-600 transition-colors shadow-sm"
+                                                                title="Edit Calculation Cover Sheet"
+                                                            >
+                                                                <FileText className="w-3 h-3" />
+                                                                <span className="text-[10px] font-bold uppercase tracking-wide">Cover Sheet</span>
+                                                            </button>
                                                             {file.isPlaceholder && <span className="ml-2 text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-yellow-200">Placeholder</span>}
-                                                            {!file.isPlaceholder && !file.fileObj && !file.downloadURL && <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-red-200 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Missing Source</span>}
+                                                            {file.isHeader && <span className="ml-2 text-[9px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-slate-300">Section Header</span>}
+                                                            {!file.isPlaceholder && !file.isHeader && !file.fileObj && !file.downloadURL && <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider border border-red-200 flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Missing Source</span>}
                                                         </div>
                                                         <input type="text" value={file.sectionSubtitle} onChange={(e) => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-sm text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Subtitle" />
-                                                        <div className="grid grid-cols-12 gap-2 bg-slate-50 p-2 rounded border border-slate-100">
-                                                            <div className="col-span-3"><input type="text" value={file.calcsBy} onChange={(e) => updateFileField(file.id, 'calcsBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="By" /></div>
-                                                            <div className="col-span-3"><input type="text" value={file.checkedBy} onChange={(e) => updateFileField(file.id, 'checkedBy', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 focus:ring-1 focus:ring-blue-500" placeholder="Chk" /></div>
-                                                            <div className="col-span-2"><input type="text" value={file.revision} onChange={(e) => updateFileField(file.id, 'revision', e.target.value)} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-center" placeholder="Rev" /></div>
-                                                            <div className="col-span-4 text-[10px] text-slate-500 pt-1.5 px-1">{file.uploadDate}</div>
-                                                        </div>
-                                                        <div className="flex items-center justify-between text-xs text-slate-400">
-                                                            <div className="flex items-center gap-2"><FileText className={`w-3 h-3 ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`} /><span className={`truncate max-w-[200px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-600 font-medium' : ''}`} title={file.name}>{file.name}</span><span className="text-slate-300">•</span>{file.isPlaceholder ? (<input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />) : (<span>{file.pageCount} Pages</span>)}</div>
-                                                            <label className={`flex items-center gap-1 cursor-pointer text-[10px] px-1.5 py-0.5 rounded transition-colors ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'bg-red-100 text-red-600 hover:bg-red-200 border border-red-200' : 'text-blue-500 hover:text-blue-700 hover:bg-blue-50'}`} title={(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link Original File" : "Replace PDF File"}><RefreshCw className="w-3 h-3" /> <span className="font-medium">{(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link PDF" : (file.isPlaceholder ? "Upload" : "Replace")}</span><input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} /></label>
-                                                        </div>
+                                                        
+                                                        {/* Simple Meta Row */}
+                                                        {!file.isHeader && (
+                                                            <div className="flex items-center justify-between text-xs text-slate-400">
+                                                                <div className="flex items-center gap-2"><FileText className={`w-3 h-3 ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`} /><span className={`truncate max-w-[200px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-600 font-medium' : ''}`} title={file.name}>{file.name}</span><span className="text-slate-300">•</span>{file.isPlaceholder ? (<input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />) : (<span>{file.pageCount} Pages</span>)}</div>
+                                                                <label className={`flex items-center gap-1 cursor-pointer text-[10px] px-1.5 py-0.5 rounded transition-colors ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'bg-red-100 text-red-600 hover:bg-red-200 border border-red-200' : 'text-blue-500 hover:text-blue-700 hover:bg-blue-50'}`} title={(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link Original File" : "Replace PDF File"}><RefreshCw className="w-3 h-3" /> <span className="font-medium">{(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link PDF" : (file.isPlaceholder ? "Upload" : "Replace")}</span><input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} /></label>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     <div className="flex items-start pt-1"><button onClick={() => removeFile(file.id)} className="p-2 text-slate-300 hover:text-red-600 rounded"><Trash2 className="w-4 h-4" /></button></div>
                                                 </li>
@@ -1136,6 +1319,8 @@
         };
 
         const root = createRoot(document.getElementById('root'));
+        // In Canvas mode, isConfigured starts as true if env vars exist, so SetupScreen is skipped.
+        // In Standalone mode, isConfigured is false initially, showing SetupScreen.
         root.render(<ErrorBoundary><React.Fragment>{isConfigured ? <CalcBinder /> : <SetupScreen onSave={() => window.location.reload()} />}</React.Fragment></ErrorBoundary>);
     </script>
 </body>
