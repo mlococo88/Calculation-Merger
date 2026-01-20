@@ -36,7 +36,7 @@
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
             Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
-            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book, PenTool, ClipboardList, Type
+            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book, PenTool, ClipboardList, Type, Copy
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS (v11.6.1) ---
@@ -617,9 +617,58 @@
                 } catch(e) { console.error("Create project failed", e); }
             };
 
+            // NEW: COPY PROJECT
+            const handleCopyProject = async (e, projectId) => {
+                e.stopPropagation();
+                if (isOfflineMode) { alert("Copy unavailable in offline mode"); return; }
+                
+                setIsProcessing(true);
+                try {
+                    // 1. Get Source
+                    const sourceRef = doc(db, "artifacts", appId, "public", "data", "projects", projectId);
+                    const sourceSnap = await getDoc(sourceRef);
+                    
+                    if (!sourceSnap.exists()) throw new Error("Source project not found");
+                    const sourceData = sourceSnap.data();
+
+                    // 2. Prepare New Data
+                    const newMeta = { 
+                        ...sourceData.projectMeta, 
+                        title: `${sourceData.projectMeta.title} (Copy)`,
+                        number: `${sourceData.projectMeta.number}-CPY`
+                    };
+
+                    // 3. Deep Copy Files (Assign new IDs to list items, keep Storage refs)
+                    const newFiles = (sourceData.files || []).map(f => ({
+                        ...f,
+                        id: crypto.randomUUID() // Critical: New List ID so keys don't conflict
+                    }));
+
+                    const newProject = {
+                        ...sourceData,
+                        projectMeta: newMeta,
+                        files: newFiles,
+                        lastModified: new Date().toISOString(),
+                        createdBy: user.uid,
+                        originalProjectId: projectId // Traceability
+                    };
+
+                    // 4. Save
+                    const colRef = collection(db, "artifacts", appId, "public", "data", "projects");
+                    const docRef = await addDoc(colRef, newProject);
+                    
+                    setActiveProjectId(docRef.id);
+                } catch (err) {
+                    console.error("Copy failed", err);
+                    alert("Failed to copy project: " + err.message);
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
             const handleDeleteProject = async (projectId, e) => {
                 e.stopPropagation();
-                if (!confirm("Delete project? ALL FILES WILL BE DELETED.")) return;
+                if (!confirm("Delete project? Files in cloud storage will REMAIN to protect Shared/Copied projects.")) return;
                 
                 if (isOfflineMode) { return; }
 
@@ -627,12 +676,9 @@
                 if (!projectToDelete) return;
 
                 try {
-                    if (projectToDelete.files && projectToDelete.files.length > 0) {
-                        const filesToDelete = projectToDelete.files
-                            .filter(f => f.downloadURL) 
-                            .map(f => deleteFromCloud(f.downloadURL));
-                        await Promise.all(filesToDelete);
-                    }
+                    // NOTE: Auto-delete of cloud files is DISABLED to support Copy/Clone functionality safely.
+                    // If we delete the PDF blob, all copied projects referencing it will break.
+                    
                     await deleteDoc(doc(db, "artifacts", appId, "public", "data", "projects", projectId));
                     
                     if (projectId === activeProjectId) {
@@ -743,7 +789,8 @@
                     try { downloadInfo = await uploadFileToFirebase(file); } catch(e) {}
                 }
 
-                if (downloadInfo.url && oldUrl) await deleteFromCloud(oldUrl);
+                // NOTE: We do NOT delete the old file here anymore to be safe with copies.
+                // if (downloadInfo.url && oldUrl) await deleteFromCloud(oldUrl);
 
                 setFiles(prev => prev.map(f => {
                     if (f.id !== id) return f;
@@ -792,11 +839,13 @@
                 handleReplaceFile(e, id); 
                 setFiles(prev => prev.map(f => f.id === id ? { ...f, isPlaceholder: false } : f));
             };
+            
             const removeFile = async (id) => {
-                const file = files.find(f => f.id === id);
+                // Modified: Only remove from LIST state. 
+                // Do NOT delete from Cloud Storage, as other projects might reference this file (Copy).
                 setFiles(files.filter(f => f.id !== id));
-                if (file && file.downloadURL) await deleteFromCloud(file.downloadURL);
             };
+            
             const removeLogo = () => { setLogoUrl(null); if (logoInputRef.current) logoInputRef.current.value = ""; };
             const updateFileField = (id, field, value) => setFiles(files.map(f => f.id === id ? { ...f, [field]: value } : f));
             const updateMeta = (field, value) => setProjectMeta(prev => ({ ...prev, [field]: value }));
@@ -1195,7 +1244,10 @@
                                                 <div className="font-medium truncate">{p.id === activeProjectId ? (projectMeta.title || "Untitled") : (p.projectMeta?.title || "Untitled")}</div>
                                                 <div className="text-[10px] opacity-70">{new Date(p.lastModified).toLocaleDateString()}</div>
                                             </div>
-                                            <button onClick={(e) => handleDeleteProject(p.id, e)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 rounded"><Trash2 className="w-3 h-3" /></button>
+                                            <div className="flex gap-1">
+                                                <button onClick={(e) => handleCopyProject(e, p.id)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-blue-100 hover:text-blue-600 rounded transition-opacity" title="Duplicate Project"><Copy className="w-3 h-3" /></button>
+                                                <button onClick={(e) => handleDeleteProject(p.id, e)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 rounded transition-opacity" title="Delete Project"><Trash2 className="w-3 h-3" /></button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
