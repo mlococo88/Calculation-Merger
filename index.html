@@ -36,7 +36,7 @@
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
             Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
             Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
-            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book, PenTool, ClipboardList, Type, Copy
+            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book, PenTool, ClipboardList, Type, Copy, GripVertical
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS (v11.6.1) ---
@@ -473,6 +473,11 @@
             const [storageStats, setStorageStats] = useState({ usedBytes: 0, fileCount: 0 });
             const [refreshStats, setRefreshStats] = useState(0); 
 
+            // --- Drag State ---
+            const [dragItem, setDragItem] = useState(null); // { index: number, x: number }
+            const [dragOverIndex, setDragOverIndex] = useState(null);
+            const [isDraggingFile, setIsDraggingFile] = useState(false);
+
             const [projectMeta, setProjectMeta] = useState({
                 title: "Structural Calculation Package",
                 number: "2025-001",
@@ -765,8 +770,9 @@
                 } catch (e) { console.warn("Cloud deletion failed", e); }
             };
 
-            const handleFileUpload = async (e) => {
-                const uploadedFiles = Array.from(e.target.files);
+            // Refactored Upload Logic to support both Input Change and Drag & Drop
+            const processFiles = async (fileList) => {
+                const uploadedFiles = Array.from(fileList);
                 const currentDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                 
                 if (!isOfflineMode) setSyncStatus('syncing');
@@ -802,6 +808,56 @@
                     }]);
                 }
                 if (!isOfflineMode) setSyncStatus('synced');
+            };
+
+            const handleFileUpload = (e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                    processFiles(e.target.files);
+                }
+            };
+
+            // --- GLOBAL DROP HANDLERS ---
+            const handleGlobalDragOver = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Check if items are being dragged (files)
+                if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+                     // Basic check if it's likely a file drag
+                     setIsDraggingFile(true);
+                }
+            };
+
+            const handleGlobalDrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingFile(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    processFiles(e.dataTransfer.files);
+                }
+            };
+            
+             // Reset drag state if drag leaves window
+             const handleGlobalDragLeave = (e) => {
+                // Only if leaving the document
+                if (e.relatedTarget === null) {
+                    setIsDraggingFile(false);
+                }
+             }
+
+
+            const handleZoneDragOver = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'copy';
+            };
+
+            const handleZoneDrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingFile(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    processFiles(e.dataTransfer.files);
+                }
             };
 
             const handleLogoUpload = async (e) => {
@@ -931,6 +987,66 @@
             
             const handleUpdateFileDetails = (fileId, newDetails) => {
                 setFiles(prev => prev.map(f => f.id === fileId ? { ...f, ...newDetails } : f));
+            };
+
+            // --- DRAG HANDLERS ---
+            const handleDragStart = (e, index) => {
+                setDragItem({ index, x: e.clientX });
+                e.dataTransfer.effectAllowed = "move";
+                // Optional: set custom drag image
+            };
+
+            const handleDragEnter = (e, index) => {
+                setDragOverIndex(index);
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault(); // Necessary to allow dropping
+                e.dataTransfer.dropEffect = 'move';
+            };
+
+            const handleDragEnd = () => {
+                setDragItem(null);
+                setDragOverIndex(null);
+            };
+
+            const handleDrop = (e, index) => {
+                e.preventDefault();
+                e.stopPropagation(); // CRITICAL: Stop bubbling to global drop handler
+                
+                // --- FIX: Check if dragging external files first! ---
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    processFiles(e.dataTransfer.files);
+                    return;
+                }
+
+                if (dragItem === null) return;
+                
+                const dragIndex = dragItem.index;
+                const dropIndex = index;
+                
+                if (dragIndex === dropIndex) {
+                    // Check for indent only
+                    const deltaX = e.clientX - dragItem.x;
+                    const indentChange = Math.round(deltaX / 40); // 40px threshold
+                    if (indentChange !== 0) changeDepth(dragIndex, indentChange);
+                    return;
+                }
+
+                // Move logic
+                const newFiles = [...files];
+                const [movedItem] = newFiles.splice(dragIndex, 1);
+                
+                // Calculate indent change
+                const deltaX = e.clientX - dragItem.x;
+                const indentChange = Math.round(deltaX / 40); 
+                
+                let newDepth = movedItem.depth + indentChange;
+                newDepth = Math.max(0, Math.min(2, newDepth)); // Clamp 0-2
+                movedItem.depth = newDepth;
+
+                newFiles.splice(dropIndex, 0, movedItem);
+                setFiles(newFiles);
             };
 
             const numberedFiles = useMemo(() => {
@@ -1264,7 +1380,12 @@
             const formatBytes = (bytes, decimals = 2) => { if (!+bytes) return '0 Bytes'; const k = 1024; const dm = decimals < 0 ? 0 : decimals; const sizes = ['Bytes', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`; };
 
             return (
-                <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-8">
+                <div 
+                    className="min-h-screen bg-slate-50 text-slate-800 font-sans p-8"
+                    onDragOver={handleGlobalDragOver}
+                    onDrop={handleGlobalDrop}
+                    onDragLeave={handleGlobalDragLeave}
+                >
                     {editingFile && (
                         <CoverSheetModal 
                             file={editingFile} 
@@ -1347,9 +1468,14 @@
 
                                     {/* Drag & Drop */}
                                     <div className="flex gap-4">
-                                        <div className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+                                        <div 
+                                            className={`flex-1 border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer ${isDraggingFile ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50 hover:bg-blue-50 hover:border-blue-400'}`} 
+                                            onClick={() => fileInputRef.current?.click()}
+                                            onDragOver={handleZoneDragOver}
+                                            onDrop={handleZoneDrop}
+                                        >
                                             <input type="file" multiple accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                                            <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" /><p className="text-lg font-medium text-slate-700">Drop PDFs here to Upload</p><p className="text-sm text-slate-500">{syncStatus === 'offline' ? 'Local memory only (Offline Mode)' : 'Automatically saved to Cloud'}</p>
+                                            <Upload className={`w-12 h-12 mx-auto mb-3 ${isDraggingFile ? 'text-blue-500' : 'text-slate-400'}`} /><p className="text-lg font-medium text-slate-700">Drop PDFs here to Upload</p><p className="text-sm text-slate-500">{syncStatus === 'offline' ? 'Local memory only (Offline Mode)' : 'Automatically saved to Cloud'}</p>
                                         </div>
                                         <div className="flex-col gap-2 flex">
                                             <div className="w-48 flex-1 border-2 border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer group" onClick={handleAddPlaceholder}>
@@ -1365,11 +1491,37 @@
                                     <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
                                         <ul className="divide-y divide-slate-100">
                                             {numberedFiles.map((file, index) => (
-                                                <li key={file.id} className={`p-4 transition-colors flex gap-4 group ${file.isHeader ? 'bg-slate-100 border-l-4 border-slate-400' : (file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50')}`}>
-                                                    <div className="flex flex-col items-center justify-center gap-2 mr-2">
-                                                        <div className="flex flex-col"><button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button><button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button></div>
-                                                        <div className="flex gap-1"><button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowLeft className="w-3 h-3" /></button><button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowRight className="w-3 h-3" /></button></div>
+                                                <li 
+                                                    key={file.id} 
+                                                    className={`p-4 transition-colors flex gap-4 group 
+                                                        ${file.isHeader ? 'bg-slate-100 border-l-4 border-slate-400' : (file.isPlaceholder ? 'bg-yellow-50/50' : 'hover:bg-slate-50')}
+                                                        ${dragOverIndex === index ? 'border-t-2 border-t-blue-500' : ''}
+                                                        ${dragItem?.index === index ? 'opacity-50' : ''}
+                                                    `}
+                                                    draggable
+                                                    onDragStart={(e) => handleDragStart(e, index)}
+                                                    onDragEnter={(e) => handleDragEnter(e, index)}
+                                                    onDragOver={handleDragOver}
+                                                    onDragEnd={handleDragEnd}
+                                                    onDrop={(e) => handleDrop(e, index)}
+                                                >
+                                                    {/* Drag Handle */}
+                                                    <div className="cursor-move p-2 text-slate-300 hover:text-slate-500 rounded hover:bg-slate-200 self-center mr-2" title="Drag to reorder">
+                                                        <GripVertical className="w-5 h-5" />
                                                     </div>
+
+                                                    {/* Arrow Controls (Restored) */}
+                                                    <div className="flex flex-col items-center justify-center gap-2 mr-2">
+                                                        <div className="flex flex-col">
+                                                            <button onClick={() => moveFile(index, -1)} disabled={index === 0} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowUp className="w-3 h-3" /></button>
+                                                            <button onClick={() => moveFile(index, 1)} disabled={index === files.length - 1} className="p-1 hover:bg-slate-200 rounded text-slate-400 disabled:opacity-20"><ArrowDown className="w-3 h-3" /></button>
+                                                        </div>
+                                                        <div className="flex gap-1">
+                                                            <button onClick={() => changeDepth(index, -1)} disabled={file.depth === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowLeft className="w-3 h-3" /></button>
+                                                            <button onClick={() => changeDepth(index, 1)} disabled={file.depth >= 2 || index === 0} className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-500 disabled:opacity-30"><ArrowRight className="w-3 h-3" /></button>
+                                                        </div>
+                                                    </div>
+
                                                     <div className="flex flex-col justify-start pt-2 w-10 shrink-0"><span className="font-mono font-bold text-slate-500 text-lg">{file.sectionLabel}</span></div>
                                                     <div className={`flex-1 space-y-3 transition-all ${getIndent(file.depth)}`}>
                                                         <div className="flex items-center justify-between">
