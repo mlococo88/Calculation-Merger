@@ -1329,7 +1329,17 @@
                                                         {/* Simple Meta Row */}
                                                         {!file.isHeader && (
                                                             <div className="flex items-center justify-between text-xs text-slate-400">
-                                                                <div className="flex items-center gap-2"><FileText className={`w-3 h-3 ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`} /><span className={`truncate max-w-[200px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-600 font-medium' : ''}`} title={file.name}>{file.name}</span><span className="text-slate-300">•</span>{file.isPlaceholder ? (<input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />) : (<span>{file.pageCount} Pages</span>)}</div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <FileText className={`w-3 h-3 ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`} />
+                                                                    <span className={`truncate max-w-[200px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-600 font-medium' : ''}`} title={file.name}>{file.name}</span>
+                                                                    <span className="text-slate-300">•</span>
+                                                                    {file.isPlaceholder ? (
+                                                                        <input type="number" min="1" value={file.pageCount} onChange={(e) => updatePlaceholderPages(file.id, e.target.value)} className="w-12 text-center border rounded px-1" />
+                                                                    ) : (
+                                                                        <span>{file.pageCount} Pages</span>
+                                                                    )}
+                                                                    {file.uploadDate && <span className="ml-2 text-slate-400" title="Date Uploaded">{file.uploadDate}</span>}
+                                                                </div>
                                                                 <label className={`flex items-center gap-1 cursor-pointer text-[10px] px-1.5 py-0.5 rounded transition-colors ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'bg-red-100 text-red-600 hover:bg-red-200 border border-red-200' : 'text-blue-500 hover:text-blue-700 hover:bg-blue-50'}`} title={(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link Original File" : "Replace PDF File"}><RefreshCw className="w-3 h-3" /> <span className="font-medium">{(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? "Link PDF" : (file.isPlaceholder ? "Upload" : "Replace")}</span><input type="file" accept=".pdf" className="hidden" onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} /></label>
                                                             </div>
                                                         )}
