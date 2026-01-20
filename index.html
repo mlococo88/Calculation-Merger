@@ -135,8 +135,7 @@
                 // Combined Field: QC Review
                 qcReviewBy: file.qcReviewBy || file.reviewedBy || file.qcBy || "",
                 qcReviewDate: file.qcReviewDate || file.reviewedDate || file.qcDate || "",
-                approvedBy: file.approvedBy || "",
-                approvedDate: file.approvedDate || "",
+                // REMOVED Approved By
                 revision: file.revision || "0",
                 calcNo: file.calcNo || "",
             });
@@ -307,7 +306,7 @@
                                     {renderSignOffRow("Checked By", "checked")}
                                     {/* Consolidated Field */}
                                     {renderSignOffRow("QC Review By", "qcReview")}
-                                    {renderSignOffRow("Approved By", "approved")}
+                                    {/* REMOVED APPROVED BY */}
                                 </div>
                                 <div className="flex items-center gap-2 justify-end">
                                     <label className="text-xs font-semibold text-slate-500">Revision:</label>
@@ -1196,56 +1195,58 @@
                 });
 
                 // Footer Sign-off (Standard Engineering Block)
-                const boxBottom = margin;
-                const boxHeight = 65;
-                const boxTop = boxBottom + boxHeight;
+                // --- CONDITION: Only if not a Header ---
+                if (!fileData.isHeader) {
+                    const boxBottom = margin;
+                    const boxHeight = 65;
+                    const boxTop = boxBottom + boxHeight;
 
-                // Outer Box
-                page.drawRectangle({
-                    x: margin,
-                    y: boxBottom,
-                    width: contentWidth,
-                    height: boxHeight,
-                    borderColor: rgb(0, 0, 0),
-                    borderWidth: 1,
-                });
+                    // Outer Box
+                    page.drawRectangle({
+                        x: margin,
+                        y: boxBottom,
+                        width: contentWidth,
+                        height: boxHeight,
+                        borderColor: rgb(0, 0, 0),
+                        borderWidth: 1,
+                    });
 
-                // --- CHANGED TO 4 COLUMNS ---
-                const colCount = 4;
-                const colW = contentWidth / colCount;
+                    // --- CHANGED TO 3 COLUMNS ---
+                    const colCount = 3;
+                    const colW = contentWidth / colCount;
 
-                // Vertical Separators & Text
-                for (let i = 0; i < colCount; i++) {
-                    // Line (except first)
-                    if (i > 0) {
-                        const lineX = margin + (i * colW);
-                        page.drawLine({
-                            start: { x: lineX, y: boxBottom },
-                            end: { x: lineX, y: boxTop },
-                            thickness: 1,
-                            color: rgb(0, 0, 0)
-                        });
+                    // Vertical Separators & Text
+                    for (let i = 0; i < colCount; i++) {
+                        // Line (except first)
+                        if (i > 0) {
+                            const lineX = margin + (i * colW);
+                            page.drawLine({
+                                start: { x: lineX, y: boxBottom },
+                                end: { x: lineX, y: boxTop },
+                                thickness: 1,
+                                color: rgb(0, 0, 0)
+                            });
+                        }
                     }
-                }
-                
-                const drawFooterCell = (index, label, name, date) => {
-                    const cellX = margin + (index * colW) + 4; // padding
-                    // Label (Top Left of cell)
-                    page.drawText(label, { x: cellX, y: boxTop - 12, size: 6, font: fontBold, color: rgb(0.5, 0.5, 0.5) });
-                    // Name (Center-ish)
-                    if (name) page.drawText(name, { x: cellX, y: boxTop - 30, size: 9, font: fontRegular, color: rgb(0, 0, 0) });
-                    // Date (Bottom)
-                    if (date) page.drawText(date, { x: cellX, y: boxBottom + 8, size: 7, font: fontRegular, color: rgb(0.3, 0.3, 0.3) });
-                };
+                    
+                    const drawFooterCell = (index, label, name, date) => {
+                        const cellX = margin + (index * colW) + 4; // padding
+                        // Label (Top Left of cell)
+                        page.drawText(label, { x: cellX, y: boxTop - 12, size: 6, font: fontBold, color: rgb(0.5, 0.5, 0.5) });
+                        // Name (Center-ish)
+                        if (name) page.drawText(name, { x: cellX, y: boxTop - 30, size: 9, font: fontRegular, color: rgb(0, 0, 0) });
+                        // Date (Bottom)
+                        if (date) page.drawText(date, { x: cellX, y: boxBottom + 8, size: 7, font: fontRegular, color: rgb(0.3, 0.3, 0.3) });
+                    };
 
-                drawFooterCell(0, "DESIGNED BY", fileData.designedBy, fileData.designedDate);
-                drawFooterCell(1, "CHECKED BY", fileData.checkedBy, fileData.checkedDate);
-                // --- CONSOLIDATED FIELD ---
-                drawFooterCell(2, "QC REVIEW BY", fileData.qcReviewBy, fileData.qcReviewDate); 
-                drawFooterCell(3, "APPROVED BY", fileData.approvedBy, fileData.approvedDate);
-                
-                if (fileData.revision) {
-                     page.drawText(`REV: ${fileData.revision}`, { x: width - margin - 150, y: titleY + 30, size: 10, font: fontBold, color: rgb(0,0,0) });
+                    drawFooterCell(0, "DESIGNED BY", fileData.designedBy, fileData.designedDate);
+                    drawFooterCell(1, "CHECKED BY", fileData.checkedBy, fileData.checkedDate);
+                    // --- CONSOLIDATED FIELD ---
+                    drawFooterCell(2, "QC REVIEW BY", fileData.qcReviewBy, fileData.qcReviewDate); 
+                    
+                    if (fileData.revision) {
+                        page.drawText(`REV: ${fileData.revision}`, { x: width - margin - 150, y: titleY + 30, size: 10, font: fontBold, color: rgb(0,0,0) });
+                    }
                 }
             };
 
@@ -1522,15 +1523,27 @@
                                                         ${dragOverIndex === index ? 'border-t-2 border-t-blue-500' : ''}
                                                         ${dragItem?.index === index ? 'opacity-50' : ''}
                                                     `}
-                                                    draggable
-                                                    onDragStart={(e) => handleDragStart(e, index)}
+                                                    // IMPORTANT: Remove draggable from here to allow text selection
                                                     onDragEnter={(e) => handleDragEnter(e, index)}
                                                     onDragOver={handleDragOver}
                                                     onDragEnd={handleDragEnd}
                                                     onDrop={(e) => handleDrop(e, index)}
                                                 >
-                                                    {/* Drag Handle */}
-                                                    <div className="cursor-move p-2 text-slate-300 hover:text-slate-500 rounded hover:bg-slate-200 self-center mr-2" title="Drag to reorder">
+                                                    {/* Drag Handle - ONLY this is draggable */}
+                                                    <div 
+                                                        className="cursor-move p-2 text-slate-300 hover:text-slate-500 rounded hover:bg-slate-200 self-center mr-2" 
+                                                        title="Drag to reorder"
+                                                        draggable
+                                                        onDragStart={(e) => {
+                                                            // Optional: Set drag image to the whole row
+                                                            if (e.dataTransfer.setDragImage) {
+                                                                 const row = e.currentTarget.closest('li');
+                                                                 if (row) e.dataTransfer.setDragImage(row, 0, 0);
+                                                            }
+                                                            handleDragStart(e, index);
+                                                        }}
+                                                        onDragEnd={handleDragEnd} // Need to attach drag end here too
+                                                    >
                                                         <GripVertical className="w-5 h-5" />
                                                     </div>
 
