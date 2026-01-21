@@ -135,7 +135,8 @@
                 // Combined Field: QC Review
                 qcReviewBy: file.qcReviewBy || file.reviewedBy || file.qcBy || "",
                 qcReviewDate: file.qcReviewDate || file.reviewedDate || file.qcDate || "",
-                // REMOVED Approved By
+                approvedBy: file.approvedBy || "",
+                approvedDate: file.approvedDate || "",
                 revision: file.revision || "0",
                 calcNo: file.calcNo || "",
             });
@@ -1086,7 +1087,7 @@
             // --- HELPER: Measure Wrapped Text Height ---
             const measureWrappedTextHeight = (text, size, font, maxWidth) => {
                 if (!text) return 0;
-                const words = text.split(' ');
+                const words = String(text).split(' ');
                 let lines = [], currentLine = words[0];
                 for (let i = 1; i < words.length; i++) {
                     const word = words[i];
@@ -1101,7 +1102,7 @@
             // --- HELPER: Get Wrapped Lines Array ---
             const getWrappedLines = (text, size, font, maxWidth) => {
                 if (!text) return [];
-                const words = text.split(' ');
+                const words = String(text).split(' ');
                 let lines = [], currentLine = words[0];
                 for (let i = 1; i < words.length; i++) {
                     const word = words[i];
@@ -1136,117 +1137,124 @@
 
             // --- FORMAL DIVIDER GENERATION ---
             const drawFormalDivider = (page, fileData, projectMeta, embeddedLogo, fonts, rgb) => {
-                const { width, height } = page.getSize();
-                const { fontBold, fontRegular } = fonts;
-                const margin = 40;
-                const contentWidth = width - (margin * 2);
-                
-                // Header Grid (Project Info)
-                const headerH = 80;
-                const headerY = height - margin - headerH;
-                page.drawLine({ start: { x: margin, y: headerY }, end: { x: width - margin, y: headerY }, thickness: 1, color: rgb(0,0,0) });
-
-                // Project Title (Top Left)
-                page.drawText("PROJECT:", { x: margin + 10, y: height - margin - 20, size: 8, font: fontBold, color: rgb(0.5,0.5,0.5) });
-                drawWrappedText(page, projectMeta.title, height - margin - 55, 14, fontBold, rgb, [0,0,0], contentWidth - 200, 'left');
-
-                // Logo placement
-                if (embeddedLogo) {
-                    const logoH = 40;
-                    const scale = logoH / embeddedLogo.height;
-                    const logoW = embeddedLogo.width * scale;
-                    page.drawImage(embeddedLogo, { x: width - margin - logoW - 10, y: height - margin - 10 - logoH, width: logoW, height: logoH });
-                }
-
-                // Section Info Block
-                const titleY = headerY - 60;
-                drawWrappedText(page, `SECTION ${fileData.sectionLabel}`, titleY, 24, fontBold, rgb, [0,0,0]);
-                drawWrappedText(page, fileData.sectionTitle || "Untitled Section", titleY - 40, 18, fontBold, rgb, [0,0,0]);
-                if (fileData.sectionSubtitle) {
-                    drawWrappedText(page, fileData.sectionSubtitle, titleY - 70, 14, fontRegular, rgb, [0.3,0.3,0.3]);
-                }
-
-                // Body Content (Grid simulation)
-                const bodyStart = titleY - 120;
-                let cursorY = bodyStart;
-
-                // Helper to draw labelled block
-                const drawBlock = (label, text) => {
-                    if (!text) return;
-                    page.drawText(label, { x: margin + 20, y: cursorY, size: 9, font: fontBold, color: rgb(0.5,0.5,0.5) });
-                    const lines = getWrappedLines(text, 10, fontRegular, contentWidth - 40);
-                    lines.forEach((line, i) => {
-                        page.drawText(line, { x: margin + 20, y: cursorY - 15 - (i*12), size: 10, font: fontRegular, color: rgb(0,0,0) });
-                    });
-                    cursorY -= (lines.length * 12) + 35; 
-                };
-
-                // DYNAMIC FIELDS RENDER
-                // Use custom fields if available, otherwise fallback to defaults (Objective/Program)
-                const fieldsToDraw = fileData.customFields || [
-                    { label: "OBJECTIVE / SCOPE", value: fileData.objective, isVisible: !!fileData.objective },
-                    { label: "COMPUTER PROGRAM", value: fileData.program, isVisible: !!fileData.program }
-                ];
-
-                fieldsToDraw.forEach(field => {
-                    if (field.isVisible && field.value) {
-                        drawBlock(field.label.toUpperCase() + ":", field.value);
-                    }
-                });
-
-                // Footer Sign-off (Standard Engineering Block)
-                // --- CONDITION: Only if not a Header ---
-                if (!fileData.isHeader) {
-                    const boxBottom = margin;
-                    const boxHeight = 65;
-                    const boxTop = boxBottom + boxHeight;
-
-                    // Outer Box
-                    page.drawRectangle({
-                        x: margin,
-                        y: boxBottom,
-                        width: contentWidth,
-                        height: boxHeight,
-                        borderColor: rgb(0, 0, 0),
-                        borderWidth: 1,
-                    });
-
-                    // --- CHANGED TO 3 COLUMNS ---
-                    const colCount = 3;
-                    const colW = contentWidth / colCount;
-
-                    // Vertical Separators & Text
-                    for (let i = 0; i < colCount; i++) {
-                        // Line (except first)
-                        if (i > 0) {
-                            const lineX = margin + (i * colW);
-                            page.drawLine({
-                                start: { x: lineX, y: boxBottom },
-                                end: { x: lineX, y: boxTop },
-                                thickness: 1,
-                                color: rgb(0, 0, 0)
-                            });
-                        }
-                    }
+                // Safety check wrapper
+                try {
+                    const { width, height } = page.getSize();
+                    const { fontBold, fontRegular } = fonts;
+                    const margin = 40;
+                    const contentWidth = width - (margin * 2);
                     
-                    const drawFooterCell = (index, label, name, date) => {
-                        const cellX = margin + (index * colW) + 4; // padding
-                        // Label (Top Left of cell)
-                        page.drawText(label, { x: cellX, y: boxTop - 12, size: 6, font: fontBold, color: rgb(0.5, 0.5, 0.5) });
-                        // Name (Center-ish)
-                        if (name) page.drawText(name, { x: cellX, y: boxTop - 30, size: 9, font: fontRegular, color: rgb(0, 0, 0) });
-                        // Date (Bottom)
-                        if (date) page.drawText(date, { x: cellX, y: boxBottom + 8, size: 7, font: fontRegular, color: rgb(0.3, 0.3, 0.3) });
+                    // Header Grid (Project Info)
+                    const headerH = 80;
+                    const headerY = height - margin - headerH;
+                    page.drawLine({ start: { x: margin, y: headerY }, end: { x: width - margin, y: headerY }, thickness: 1, color: rgb(0,0,0) });
+
+                    // Project Title (Top Left)
+                    page.drawText("PROJECT:", { x: margin + 10, y: height - margin - 20, size: 8, font: fontBold, color: rgb(0.5,0.5,0.5) });
+                    drawWrappedText(page, projectMeta.title, height - margin - 55, 14, fontBold, rgb, [0,0,0], contentWidth - 200, 'left');
+
+                    // Logo placement
+                    if (embeddedLogo) {
+                        const logoH = 40;
+                        const scale = logoH / embeddedLogo.height;
+                        const logoW = embeddedLogo.width * scale;
+                        page.drawImage(embeddedLogo, { x: width - margin - logoW - 10, y: height - margin - 10 - logoH, width: logoW, height: logoH });
+                    }
+
+                    // Section Info Block
+                    const titleY = headerY - 60;
+                    drawWrappedText(page, `SECTION ${fileData.sectionLabel}`, titleY, 24, fontBold, rgb, [0,0,0]);
+                    drawWrappedText(page, fileData.sectionTitle || "Untitled Section", titleY - 40, 18, fontBold, rgb, [0,0,0]);
+                    if (fileData.sectionSubtitle) {
+                        drawWrappedText(page, fileData.sectionSubtitle, titleY - 70, 14, fontRegular, rgb, [0.3,0.3,0.3]);
+                    }
+
+                    // Body Content (Grid simulation)
+                    const bodyStart = titleY - 120;
+                    let cursorY = bodyStart;
+
+                    // Helper to draw labelled block
+                    const drawBlock = (label, text) => {
+                        if (!text) return;
+                        page.drawText(label, { x: margin + 20, y: cursorY, size: 9, font: fontBold, color: rgb(0.5,0.5,0.5) });
+                        const lines = getWrappedLines(text, 10, fontRegular, contentWidth - 40);
+                        lines.forEach((line, i) => {
+                            page.drawText(line, { x: margin + 20, y: cursorY - 15 - (i*12), size: 10, font: fontRegular, color: rgb(0,0,0) });
+                        });
+                        cursorY -= (lines.length * 12) + 35; 
                     };
 
-                    drawFooterCell(0, "DESIGNED BY", fileData.designedBy, fileData.designedDate);
-                    drawFooterCell(1, "CHECKED BY", fileData.checkedBy, fileData.checkedDate);
-                    // --- CONSOLIDATED FIELD ---
-                    drawFooterCell(2, "QC REVIEW BY", fileData.qcReviewBy, fileData.qcReviewDate); 
-                    
-                    if (fileData.revision) {
-                        page.drawText(`REV: ${fileData.revision}`, { x: width - margin - 150, y: titleY + 30, size: 10, font: fontBold, color: rgb(0,0,0) });
+                    // DYNAMIC FIELDS RENDER
+                    // Use custom fields if available, otherwise fallback to defaults (Objective/Program)
+                    const fieldsToDraw = fileData.customFields || [
+                        { label: "OBJECTIVE / SCOPE", value: fileData.objective, isVisible: !!fileData.objective },
+                        { label: "COMPUTER PROGRAM", value: fileData.program, isVisible: !!fileData.program }
+                    ];
+
+                    fieldsToDraw.forEach(field => {
+                        // Added safe navigation for field.label
+                        if (field.isVisible && field.value && field.label) {
+                            drawBlock(field.label.toUpperCase() + ":", field.value);
+                        }
+                    });
+
+                    // Footer Sign-off (Standard Engineering Block)
+                    // --- CONDITION: Only if not a Header ---
+                    if (!fileData.isHeader) {
+                        const boxBottom = margin;
+                        const boxHeight = 65;
+                        const boxTop = boxBottom + boxHeight;
+
+                        // Outer Box
+                        page.drawRectangle({
+                            x: margin,
+                            y: boxBottom,
+                            width: contentWidth,
+                            height: boxHeight,
+                            borderColor: rgb(0, 0, 0),
+                            borderWidth: 1,
+                        });
+
+                        // --- CHANGED TO 3 COLUMNS ---
+                        const colCount = 3;
+                        const colW = contentWidth / colCount;
+
+                        // Vertical Separators & Text
+                        for (let i = 0; i < colCount; i++) {
+                            // Line (except first)
+                            if (i > 0) {
+                                const lineX = margin + (i * colW);
+                                page.drawLine({
+                                    start: { x: lineX, y: boxBottom },
+                                    end: { x: lineX, y: boxTop },
+                                    thickness: 1,
+                                    color: rgb(0, 0, 0)
+                                });
+                            }
+                        }
+                        
+                        const drawFooterCell = (index, label, name, date) => {
+                            const cellX = margin + (index * colW) + 4; // padding
+                            // Label (Top Left of cell)
+                            page.drawText(label, { x: cellX, y: boxTop - 12, size: 6, font: fontBold, color: rgb(0.5, 0.5, 0.5) });
+                            // Name (Center-ish)
+                            if (name) page.drawText(name, { x: cellX, y: boxTop - 30, size: 9, font: fontRegular, color: rgb(0, 0, 0) });
+                            // Date (Bottom)
+                            if (date) page.drawText(date, { x: cellX, y: boxBottom + 8, size: 7, font: fontRegular, color: rgb(0.3, 0.3, 0.3) });
+                        };
+
+                        drawFooterCell(0, "DESIGNED BY", fileData.designedBy, fileData.designedDate);
+                        drawFooterCell(1, "CHECKED BY", fileData.checkedBy, fileData.checkedDate);
+                        // --- CONSOLIDATED FIELD ---
+                        drawFooterCell(2, "QC REVIEW BY", fileData.qcReviewBy, fileData.qcReviewDate); 
+                        
+                        if (fileData.revision) {
+                            page.drawText(`REV: ${fileData.revision}`, { x: width - margin - 150, y: titleY + 30, size: 10, font: fontBold, color: rgb(0,0,0) });
+                        }
                     }
+                } catch(err) {
+                    console.error("Error drawing divider page:", err);
+                    page.drawText("Error generating divider content", { x: 50, y: 50, size: 12, color: rgb(1, 0, 0) });
                 }
             };
 
@@ -1363,7 +1371,11 @@
                                 let fileBytes = null;
                                 if (f.fileObj) fileBytes = await f.fileObj.arrayBuffer();
                                 else if (f.storagePath) { const r = ref(storage, f.storagePath); fileBytes = await getBytes(r); }
-                                else if (f.downloadURL) { const res = await fetch(f.downloadURL); fileBytes = await res.arrayBuffer(); }
+                                else if (f.downloadURL) { 
+                                    const res = await fetch(f.downloadURL); 
+                                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                    fileBytes = await res.arrayBuffer(); 
+                                }
 
                                 if (fileBytes) {
                                     const srcDoc = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
@@ -1371,8 +1383,10 @@
                                     copied.forEach(p => mergedPdf.addPage(p));
                                 }
                             } catch (e) {
+                                console.error(e);
                                 const errP = mergedPdf.addPage(LETTER_SIZE);
                                 errP.drawText(`Error loading file: ${f.name}`, { x: 50, y: 700 });
+                                errP.drawText(e.message, { x: 50, y: 680, size: 10, color: rgb(1,0,0) });
                             }
                         }
                     }
@@ -1397,8 +1411,9 @@
                     link.click();
                     document.body.removeChild(link);
 
-                } catch (e) { alert("Error: " + e.message); }
-                finally { setIsProcessing(false); }
+                } catch (e) { 
+                    alert("PDF Generation Error: " + e.message + "\n\nIf this is a fetch error, please enable CORS on your bucket."); 
+                } finally { setIsProcessing(false); }
             };
 
             const getIndent = (d) => d === 0 ? '' : d === 1 ? 'pl-8 border-l-4 border-slate-200' : 'pl-16 border-l-4 border-slate-200 ml-4';
