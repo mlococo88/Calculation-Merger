@@ -282,12 +282,14 @@
                                                 </div>
                                                 <textarea 
                                                     rows={2} 
+                                                    maxLength={2500} // Character Limit
                                                     value={field.value}
                                                     onChange={e => handleCustomFieldChange(index, 'value', e.target.value)}
                                                     className={`w-full border rounded p-2 text-sm outline-none resize-none transition-colors ${!field.isVisible ? 'text-slate-400 bg-slate-100 border-slate-200' : 'bg-white border-slate-300 focus:ring-2 focus:ring-blue-500'}`}
                                                     placeholder="Enter details..."
                                                     disabled={!field.isVisible}
                                                 />
+                                                {field.isVisible && <div className="text-[10px] text-right text-slate-400">{field.value.length}/2500</div>}
                                             </div>
                                         </div>
                                     ))}
@@ -1118,11 +1120,24 @@
                 return lines;
             };
 
+            // Enhanced cleaner to replace newlines with spaces for safety
+            const cleanText = (text) => {
+                if (!text) return "";
+                return String(text)
+                    .replace(/[\r\n]+/g, " ") // Replace newlines with spaces
+                    .replace(/[\u2018\u2019]/g, "'") // Smart quotes
+                    .replace(/[\u201C\u201D]/g, '"') // Smart double quotes
+                    .replace(/[\u2013\u2014]/g, '-') // Dashes
+                    .replace(/[\u2022]/g, '-')       // Bullets
+                    .replace(/[^\x00-\x7F]/g, "");   // Strip non-ASCII
+            };
+
             const drawWrappedText = (page, text, y, size, font, rgb, color = [0,0,0], maxWidth, align = 'center') => {
                 if (!text) return;
+                const safeText = cleanText(text);
                 const { width } = page.getSize();
                 const safeWidth = maxWidth || (width - 100);
-                const lines = getWrappedLines(text, size, font, safeWidth);
+                const lines = getWrappedLines(safeText, size, font, safeWidth);
                 const lineHeight = size * 1.3;
                 const centerIndex = (lines.length - 1) / 2;
                 lines.forEach((line, i) => {
@@ -1176,10 +1191,18 @@
                     // Helper to draw labelled block
                     const drawBlock = (label, text) => {
                         if (!text) return;
+                        // Safety check: stop drawing if we hit the footer
+                        if (cursorY < (margin + 65 + 40)) return; 
+
                         page.drawText(label, { x: margin + 20, y: cursorY, size: 9, font: fontBold, color: rgb(0.5,0.5,0.5) });
-                        const lines = getWrappedLines(text, 10, fontRegular, contentWidth - 40);
+                        const safeText = cleanText(text);
+                        const lines = getWrappedLines(safeText, 10, fontRegular, contentWidth - 40);
+                        
                         lines.forEach((line, i) => {
-                            page.drawText(line, { x: margin + 20, y: cursorY - 15 - (i*12), size: 10, font: fontRegular, color: rgb(0,0,0) });
+                            const lineY = cursorY - 15 - (i*12);
+                            if (lineY > (margin + 65 + 10)) { // Ensure line doesn't overlap footer
+                                page.drawText(line, { x: margin + 20, y: lineY, size: 10, font: fontRegular, color: rgb(0,0,0) });
+                            }
                         });
                         cursorY -= (lines.length * 12) + 35; 
                     };
