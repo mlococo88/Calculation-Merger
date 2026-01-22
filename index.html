@@ -157,98 +157,98 @@
         }
 
         // --- HELPER: BOOKMARK GENERATOR ---
-        // Robust Tree-Based Bookmark Generator for PDF-Lib
+        // Robust Tree-Based Bookmark Generator for PDF-Lib (Rewritten for reliability)
         const attachBookmarks = (pdfDoc, bookmarks) => {
             if (!bookmarks || bookmarks.length === 0) return;
-            const { PDFName, PDFString, PDFNumber } = window.PDFLib;
-            const context = pdfDoc.context;
-            const outlinesDictRef = context.nextRef();
+            try {
+                const { PDFName, PDFString, PDFNumber } = window.PDFLib;
+                const context = pdfDoc.context;
+                
+                // 1. Create Refs for everyone first
+                const rootRef = context.nextRef();
+                const items = bookmarks.map(b => ({
+                    ...b,
+                    ref: context.nextRef(),
+                    children: []
+                }));
 
-            // 1. Build Tree Structure
-            const root = { children: [], count: 0, ref: outlinesDictRef }; 
-            let currentPath = [root]; // Stack of parents: [Root, Depth0, Depth1]
+                // 2. Build the Tree Structure using a Stack
+                // The stack holds the current 'active' parent at each depth level
+                // Index 0 = Root (Depth -1 equivalent), Index 1 = Depth 0, Index 2 = Depth 1, etc.
+                const rootItem = { children: [], count: 0, ref: rootRef };
+                const stack = [rootItem]; 
 
-            bookmarks.forEach((bm) => {
-                const node = { 
-                    title: bm.title, 
-                    pageRef: bm.page.ref, 
-                    children: [], 
-                    count: 0,
-                    ref: context.nextRef(), // Assign ref upfront
-                    parent: null
+                for (const item of items) {
+                    // Ensure stack is the right size for this item's depth
+                    // If item is depth 0, we want stack size 1 (root)
+                    // If item is depth 1, we want stack size 2 (root + depth0 parent)
+                    while (stack.length > item.depth + 1) {
+                        stack.pop();
+                    }
+                    
+                    const parent = stack[stack.length - 1];
+                    item.parent = parent;
+                    parent.children.push(item);
+                    
+                    // This item might be a parent for the next one
+                    stack.push(item);
+                }
+
+                // 3. Recursive function to calculate counts and create dictionaries
+                // PDF 'Count' = Total number of open descendants at all levels
+                const processNode = (node) => {
+                    let totalDescendants = 0;
+                    
+                    for (let i = 0; i < node.children.length; i++) {
+                        const child = node.children[i];
+                        const childDescendants = processNode(child);
+                        totalDescendants += (1 + childDescendants); // 1 for the child itself + its descendants
+                        
+                        // Create Dictionary for Child
+                        const map = new Map();
+                        map.set(PDFName.of('Title'), PDFString.of(child.title));
+                        map.set(PDFName.of('Parent'), node.ref);
+                        map.set(PDFName.of('Dest'), [child.page.ref, PDFName.of('Fit')]); // Explicitly use page ref
+
+                        // Link Siblings
+                        if (i > 0) map.set(PDFName.of('Prev'), node.children[i - 1].ref);
+                        if (i < node.children.length - 1) map.set(PDFName.of('Next'), node.children[i + 1].ref);
+
+                        // Link Children
+                        if (child.children.length > 0) {
+                            map.set(PDFName.of('First'), child.children[0].ref);
+                            map.set(PDFName.of('Last'), child.children[child.children.length - 1].ref);
+                            map.set(PDFName.of('Count'), PDFNumber.of(childDescendants)); // Positive = Open
+                        }
+
+                        // Assign object to context
+                        context.assign(child.ref, context.obj(map));
+                    }
+                    return totalDescendants;
                 };
 
-                // Determine parent based on depth
-                // Depth 0 -> Parent is root (stack index 0)
-                // Depth 1 -> Parent is last Depth 0 (stack index 1)
-                // Ensure stack is appropriate size
-                while (currentPath.length > bm.depth + 1) {
-                    currentPath.pop();
-                }
-                // Fallback: if depth jumps (e.g. 0 -> 2), attach to nearest parent
-                const parent = currentPath[currentPath.length - 1];
-                
-                node.parent = parent;
-                parent.children.push(node);
-                
-                // Update Path: This node becomes the parent for the next deeper level
-                currentPath.push(node);
-            });
+                // 4. Process from Root
+                const totalOpen = processNode(rootItem);
 
-            // 2. Calculate Counts (Total Open Descendants)
-            // PDF spec: Count = total number of open items at all levels below this item.
-            // Positive = open, Negative = closed. We'll default to Open (Positive).
-            const calcCounts = (node) => {
-                let total = 0;
-                for (const child of node.children) {
-                    total += 1 + calcCounts(child); // 1 (child itself) + descendants
-                }
-                node.count = total;
-                return total;
-            };
-            calcCounts(root);
-
-            // 3. Construct PDF Objects
-            // Helper to process a list of siblings
-            const processSiblings = (siblings, parentRef) => {
-                siblings.forEach((node, i) => {
-                    const map = new Map();
-                    map.set(PDFName.of('Title'), PDFString.of(node.title));
-                    map.set(PDFName.of('Parent'), parentRef);
-                    map.set(PDFName.of('Dest'), [node.pageRef, PDFName.of('Fit')]);
-
-                    // Prev/Next
-                    if (i > 0) map.set(PDFName.of('Prev'), siblings[i - 1].ref);
-                    if (i < siblings.length - 1) map.set(PDFName.of('Next'), siblings[i + 1].ref);
-
-                    // First/Last/Count (if children exist)
-                    if (node.children.length > 0) {
-                        map.set(PDFName.of('First'), node.children[0].ref);
-                        map.set(PDFName.of('Last'), node.children[node.children.length - 1].ref);
-                        map.set(PDFName.of('Count'), PDFNumber.of(node.count)); // Positive = Open
-                        
-                        // Recurse
-                        processSiblings(node.children, node.ref);
-                    }
-
-                    context.assign(node.ref, context.obj(map));
-                });
-            };
-
-            // Process Root's children
-            if (root.children.length > 0) {
-                processSiblings(root.children, outlinesDictRef);
-
+                // 5. Create Root Dictionary (The Catalog 'Outlines' entry)
                 const rootMap = new Map();
                 rootMap.set(PDFName.of('Type'), PDFName.of('Outlines'));
-                rootMap.set(PDFName.of('First'), root.children[0].ref);
-                rootMap.set(PDFName.of('Last'), root.children[root.children.length - 1].ref);
-                rootMap.set(PDFName.of('Count'), PDFNumber.of(root.count));
+                if (rootItem.children.length > 0) {
+                    rootMap.set(PDFName.of('First'), rootItem.children[0].ref);
+                    rootMap.set(PDFName.of('Last'), rootItem.children[rootItem.children.length - 1].ref);
+                    rootMap.set(PDFName.of('Count'), PDFNumber.of(totalOpen));
+                } else {
+                    rootMap.set(PDFName.of('Count'), PDFNumber.of(0));
+                }
 
-                context.assign(outlinesDictRef, context.obj(rootMap));
+                context.assign(rootRef, context.obj(rootMap));
 
-                pdfDoc.catalog.set(PDFName.of('Outlines'), outlinesDictRef);
+                // 6. Link to Catalog
+                pdfDoc.catalog.set(PDFName.of('Outlines'), rootRef);
                 pdfDoc.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'));
+
+            } catch (e) {
+                console.error("Bookmark Generation Error:", e);
             }
         };
 
