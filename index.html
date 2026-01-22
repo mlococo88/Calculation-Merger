@@ -11,11 +11,26 @@
     <!-- PDF-Lib Engine (Required for PDF manipulation) -->
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 
+    <!-- PDF.js Engine (Required for rendering preview) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        // Initialize PDF.js Worker immediately
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+
     <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <!-- Google Font (Noto Sans for consistency) -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Firebase SDKs (v11.6.1) -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, listAll, getMetadata, getBytes } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js';
+    </script>
 
     <style>
         body { font-family: 'Noto Sans', sans-serif; }
@@ -24,6 +39,9 @@
         .preview-scroll::-webkit-scrollbar-track { background: #f1f5f9; }
         .preview-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         .preview-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* Drag ghost image fix */
+        .drag-ghost { opacity: 0.5; background: white; border: 1px solid #ccc; }
     </style>
 </head>
 <body class="bg-slate-100 overflow-hidden"> 
@@ -35,7 +53,7 @@
         import React, { useState, useRef, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
         
-        // Import Icons (Broken into multiline to prevent parsing errors)
+        // Import Icons
         import { 
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
@@ -45,7 +63,7 @@
             RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
             FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, 
             ZapOff, Globe, Book, PenTool, ClipboardList, Type, Copy, 
-            GripVertical, Maximize2
+            GripVertical, Maximize2, ExternalLink, ChevronLeft, ChevronRight
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS (v11.6.1) ---
@@ -100,6 +118,18 @@
                 isConfigured = false;
             }
         }
+
+        // --- UTILS: DEEP COMPARE ---
+        const isEqual = (a, b) => {
+            if (a === b) return true;
+            if (a && b && typeof a === 'object' && typeof b === 'object') {
+                if (Array.isArray(a) !== Array.isArray(b)) return false;
+                const keys = Object.keys(a);
+                if (keys.length !== Object.keys(b).length) return false;
+                return keys.every(key => b.hasOwnProperty(key) && isEqual(a[key], b[key]));
+            }
+            return false;
+        };
 
         // --- ERROR BOUNDARY ---
         class ErrorBoundary extends React.Component {
@@ -175,6 +205,119 @@
             } catch (e) {
                 console.warn("Bookmark generation failed, skipping bookmarks.", e);
             }
+        };
+
+        // --- COMPONENT: PDF CANVAS PREVIEW ---
+        // This replaces the <object> tag to ensure rendering in sandboxed environments
+        const PdfCanvasPreview = ({ pdfData }) => {
+            const canvasRef = useRef(null);
+            const containerRef = useRef(null);
+            const [pdfDoc, setPdfDoc] = useState(null);
+            const [pageNum, setPageNum] = useState(1);
+            const [numPages, setNumPages] = useState(0);
+            const [baseWidth, setBaseWidth] = useState(0);
+            const [renderError, setRenderError] = useState(null);
+
+            // 1. Load Document
+            useEffect(() => {
+                if (!pdfData) return;
+                const loadTask = window.pdfjsLib.getDocument({ data: pdfData });
+                loadTask.promise.then(doc => {
+                    setPdfDoc(doc);
+                    setNumPages(doc.numPages);
+                    setPageNum(1);
+                    setRenderError(null);
+                }, err => {
+                    console.error("PDF Load Error", err);
+                    setRenderError("Failed to load PDF data.");
+                });
+                return () => { if(loadTask) loadTask.destroy(); }
+            }, [pdfData]);
+
+            // 2. Measure Container (Resize Observer)
+            useEffect(() => {
+                if (!containerRef.current) return;
+                
+                const updateWidth = () => {
+                    if (containerRef.current && containerRef.current.parentElement) {
+                        // Measure parent to avoid scrollbar loop issues
+                        setBaseWidth(containerRef.current.parentElement.clientWidth - 48); // 48px padding
+                    }
+                };
+                
+                updateWidth();
+                window.addEventListener('resize', updateWidth);
+                
+                const observer = new ResizeObserver(updateWidth);
+                if (containerRef.current.parentElement) {
+                    observer.observe(containerRef.current.parentElement);
+                }
+
+                return () => {
+                    window.removeEventListener('resize', updateWidth);
+                    observer.disconnect();
+                };
+            }, []);
+
+            // 3. Render Page
+            useEffect(() => {
+                if (!pdfDoc || !canvasRef.current || baseWidth === 0) return;
+                
+                let renderTask = null;
+
+                const renderPage = async () => {
+                    try {
+                        const page = await pdfDoc.getPage(pageNum);
+                        
+                        // Get unscaled viewport (1.0 scale) to determine intrinsic width
+                        const unscaledViewport = page.getViewport({ scale: 1.0 });
+                        
+                        // Calculate "Fit Width" scale based on the STABLE baseWidth
+                        const fitScale = baseWidth / unscaledViewport.width;
+                        
+                        // Use only fitScale (Zoom removed)
+                        const viewport = page.getViewport({ scale: Math.max(0.1, fitScale) });
+
+                        const canvas = canvasRef.current;
+                        const context = canvas.getContext('2d');
+                        
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+
+                        const renderContext = {
+                            canvasContext: context,
+                            viewport: viewport
+                        };
+                        
+                        renderTask = page.render(renderContext);
+                        await renderTask.promise;
+                    } catch (err) {
+                        if (err.name !== 'RenderingCancelledException') {
+                            console.error("Render error", err);
+                        }
+                    }
+                };
+                renderPage();
+                
+                return () => { if (renderTask) renderTask.cancel(); };
+            }, [pdfDoc, pageNum, baseWidth]); // Removed userZoom dependency
+
+            if (renderError) return <div className="text-red-500 p-4 text-center text-xs">{renderError}</div>;
+
+            return (
+                <div className="flex flex-col items-center w-full h-full bg-slate-300 overflow-hidden relative">
+                    <div ref={containerRef} className="flex-1 overflow-auto w-full flex justify-center p-6">
+                        <canvas ref={canvasRef} className="shadow-lg bg-white" />
+                    </div>
+                    {numPages > 0 && (
+                        <div className="absolute bottom-4 z-50 bg-white/90 backdrop-blur shadow-md rounded-full px-4 py-2 flex items-center gap-4 text-sm font-medium text-slate-700 transition-opacity hover:opacity-100 border border-slate-200">
+                            <button onClick={() => setPageNum(p => Math.max(1, p - 1))} disabled={pageNum<=1} className="hover:text-blue-600 disabled:opacity-30"><ChevronLeft className="w-4 h-4" /></button>
+                            <span className="min-w-[80px] text-center">Page {pageNum} / {numPages}</span>
+                            <button onClick={() => setPageNum(p => Math.min(numPages, p + 1))} disabled={pageNum>=numPages} className="hover:text-blue-600 disabled:opacity-30"><ChevronRight className="w-4 h-4" /></button>
+                        </div>
+                    )}
+                </div>
+            );
         };
 
 
@@ -306,7 +449,7 @@
             </div>
         );
 
-        const SetupScreen = ({ onSave }) => { /* ... Same as before ... */ 
+        const SetupScreen = ({ onSave }) => { 
             const [configInput, setConfigInput] = useState('');
             const [error, setError] = useState('');
             const [isTesting, setIsTesting] = useState(false);
@@ -362,7 +505,7 @@
             const [isProcessing, setIsProcessing] = useState(false);
             const [storageStats, setStorageStats] = useState({ usedBytes: 0, fileCount: 0 });
             const [refreshStats, setRefreshStats] = useState(0); 
-            const [pdfUrl, setPdfUrl] = useState(null); // For Preview
+            const [pdfData, setPdfData] = useState(null); // CHANGED: Store Uint8Array instead of URL
 
             // --- Drag State ---
             const [dragItem, setDragItem] = useState(null); // { index: number, x: number }
@@ -382,6 +525,7 @@
             const [logoUrl, setLogoUrl] = useState(null); 
             const [logoScale, setLogoScale] = useState("1.0"); 
             const [pageNumberPos, setPageNumberPos] = useState('right');
+            const [autoUpdate, setAutoUpdate] = useState(false); // Default OFF to stabilize
 
             const [pdfLibLoaded, setPdfLibLoaded] = useState(false);
             const fileInputRef = useRef(null);
@@ -482,7 +626,7 @@
                 return () => unsubscribe();
             }, []);
 
-            // --- ACTIVE PROJECT DATA LISTENER ---
+            // --- ACTIVE PROJECT DATA LISTENER (PATCHED) ---
             useEffect(() => {
                 if (isOfflineMode || !user || !activeProjectId) return;
 
@@ -490,12 +634,29 @@
                 const unsubDoc = onSnapshot(docRef, (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
-                        if (data.projectMeta) setProjectMeta(data.projectMeta);
+                        
+                        // 1. Project Meta Update (with strict comparison)
+                        if (data.projectMeta) {
+                            setProjectMeta(prev => {
+                                if (isEqual(prev, data.projectMeta)) return prev;
+                                return data.projectMeta;
+                            });
+                        }
+
+                        // 2. Files Update (with strict comparison)
                         if (data.files) {
-                            setFiles(currentFiles => {
+                            setFiles(prev => {
                                 const cloudFiles = data.files || [];
+                                // Prepare local version for comparison by stripping blobs
+                                const prevClean = prev.map(({ fileObj, ...rest }) => rest);
+                                
+                                if (isEqual(prevClean, cloudFiles)) {
+                                    return prev;
+                                }
+
+                                // Merge cloud data with local file objects
                                 return cloudFiles.map(cf => {
-                                    const localMatch = currentFiles.find(lf => lf.id === cf.id);
+                                    const localMatch = prev.find(lf => lf.id === cf.id);
                                     return { 
                                         ...cf, 
                                         fileObj: localMatch?.fileObj || null 
@@ -503,11 +664,13 @@
                                 });
                             });
                         }
-                        if (data.logoUrl) setLogoUrl(data.logoUrl);
-                        if (data.logoScale !== undefined) setLogoScale(data.logoScale.toString());
-                        if (data.pageNumberPos) setPageNumberPos(data.pageNumberPos);
+
+                        // 3. Settings Updates
+                        if (data.logoUrl) setLogoUrl(prev => prev === data.logoUrl ? prev : data.logoUrl);
+                        if (data.logoScale !== undefined) setLogoScale(prev => prev === data.logoScale.toString() ? prev : data.logoScale.toString());
+                        if (data.pageNumberPos) setPageNumberPos(prev => prev === data.pageNumberPos ? prev : data.pageNumberPos);
+                        
                         setSyncStatus('synced');
-                        setRefreshStats(prev => prev + 1); 
                     }
                 }, (err) => {
                     console.error("Project fetch error", err);
@@ -568,6 +731,30 @@
                 const timeout = setTimeout(saveData, 2000);
                 return () => clearTimeout(timeout);
             }, [files, projectMeta, logoUrl, logoScale, pageNumberPos, user, syncStatus, activeProjectId]);
+
+            // --- Auto-Preview Effect (Debounced) ---
+            useEffect(() => {
+                if (!autoUpdate || files.length === 0) return;
+                
+                const timer = setTimeout(() => {
+                    generateBinder('preview', true); // true = silent/auto mode
+                }, 1500); // 1.5s delay after last change
+
+                return () => clearTimeout(timer);
+            }, [files, projectMeta, logoUrl, logoScale, pageNumberPos, autoUpdate]);
+
+            // --- INITIAL AUTO-LOAD EFFECT ---
+            // Trigger preview generation once when files are loaded and PDF lib is ready
+            useEffect(() => {
+                // Ensure PDF lib is ready, files exist, and we haven't generated yet (pdfData is null)
+                if (pdfLibLoaded && files.length > 0 && !pdfData && !isProcessing) {
+                    // Use a small timeout to ensure state is settled
+                    const t = setTimeout(() => {
+                        generateBinder('preview', true);
+                    }, 500);
+                    return () => clearTimeout(t);
+                }
+            }, [pdfLibLoaded, files, pdfData, isProcessing]);
 
 
             // --- PROJECT ACTIONS ---
@@ -843,7 +1030,7 @@
                 setFiles(prev => [...prev, {
                     id: crypto.randomUUID(), downloadURL: null, fileObj: null,
                     name: "Placeholder Section", sectionTitle: "New Placeholder", sectionSubtitle: "",
-                    calcsBy: "", checkedBy: "", revision: "0", uploadDate: d, pageCount: 5, rawPages: 5, size: "N/A", depth: 0, isPlaceholder: true,
+                    calcsBy: "", checkedBy: "", revision: "0", uploadDate: currentDate, pageCount: 5, rawPages: 5, size: "N/A", depth: 0, isPlaceholder: true,
                     objective: "", program: ""
                 }]);
             };
@@ -854,7 +1041,7 @@
                 setFiles(prev => [...prev, {
                     id: crypto.randomUUID(), downloadURL: null, fileObj: null,
                     name: "Section Header", sectionTitle: "New Section", sectionSubtitle: "",
-                    calcsBy: "", checkedBy: "", revision: "0", uploadDate: d, pageCount: 0, rawPages: 0, size: "N/A", depth: 0, 
+                    calcsBy: "", checkedBy: "", revision: "0", uploadDate: currentDate, pageCount: 0, rawPages: 0, size: "N/A", depth: 0, 
                     isHeader: true, // Distinct flag
                     objective: "", program: ""
                 }]);
@@ -1174,8 +1361,8 @@
             };
 
 
-            const generateBinder = async (action = 'download') => {
-                setIsProcessing(true);
+            const generateBinder = async (action = 'download', isAuto = false) => {
+                if (!isAuto) setIsProcessing(true); // Only show loading spinner for manual clicks
                 try {
                     const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
                     const mergedPdf = await PDFDocument.create();
@@ -1184,9 +1371,7 @@
                     const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
                     const fonts = { fontBold, fontRegular, fontOblique };
 
-                    const parsedScale = parseFloat(logoScale) || 1.0;
-
-                    // --- LOGO EMBEDDING STRATEGY ---
+                    // Logo Fetch
                     let embeddedLogo = null;
                     if (logoUrl) { try { const res = await fetch(logoUrl); const logoBytes = await res.arrayBuffer(); const isPng = logoUrl.startsWith('data:image/png'); embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes); } catch(e){} }
 
@@ -1269,7 +1454,7 @@
                                     if (f.fileObj) bytes = await f.fileObj.arrayBuffer();
                                     else if (f.downloadURL) { 
                                         const r = await fetch(f.downloadURL); 
-                                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
                                         bytes = await r.arrayBuffer(); 
                                     }
                                     if (bytes) {
@@ -1298,12 +1483,23 @@
                     }
 
                     const pdfBytes = await mergedPdf.save();
-                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                    const url = URL.createObjectURL(blob);
+                    // const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    // const url = URL.createObjectURL(blob);
                     
                     if (action === 'preview') {
-                        setPdfUrl(url);
+                        setPdfData(pdfBytes);
+                    } else if (action === 'open') {
+                        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.target = '_blank';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
                     } else {
+                        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                        const url = URL.createObjectURL(blob);
                         const link = document.createElement('a');
                         link.href = url;
                         link.download = `Binder_${projectMeta.number}.pdf`;
@@ -1329,8 +1525,19 @@
                         </div>
                         <div className="flex items-center gap-3">
                             {authError && <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{authError}</div>}
+                            
+                            <div className="flex items-center gap-2 mr-2 bg-slate-100 px-2 py-1 rounded-md">
+                                <span className="text-xs font-semibold text-slate-500">Live:</span>
+                                <button 
+                                    onClick={() => setAutoUpdate(!autoUpdate)} 
+                                    className={`relative w-8 h-4 rounded-full transition-colors ${autoUpdate ? 'bg-green-500' : 'bg-slate-300'}`}
+                                >
+                                    <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${autoUpdate ? 'translate-x-4' : 'translate-x-0'}`} />
+                                </button>
+                            </div>
+
                             <button onClick={() => setShowConfigModal(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors" title="Output Settings"><Settings className="w-5 h-5" /></button>
-                            <button onClick={() => generateBinder('preview')} disabled={isProcessing} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 font-medium rounded-md hover:bg-slate-50 transition-colors">{isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />} Update Preview</button>
+                            <button onClick={() => generateBinder('preview')} disabled={isProcessing} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 font-medium rounded-md hover:bg-slate-50 transition-colors">{isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Update</button>
                             <button onClick={() => generateBinder('download')} disabled={isProcessing} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 transition-colors shadow-sm"><Save className="w-4 h-4" /> Download PDF</button>
                         </div>
                     </div>
@@ -1467,14 +1674,20 @@
 
                         {/* 3. Preview Pane (33%) */}
                         <div className="col-span-4 bg-slate-200 h-full border-l border-slate-300 flex flex-col">
-                            <div className="flex-none p-2 bg-slate-100 border-b border-slate-200 text-xs text-center text-slate-500 font-medium">Live Preview</div>
-                            <div className="flex-1 overflow-hidden relative">
-                                {pdfUrl ? (
-                                    <iframe src={pdfUrl} className="w-full h-full border-none" />
+                            <div className="flex-none p-2 bg-slate-100 border-b border-slate-200 text-xs text-center text-slate-500 font-medium flex justify-between px-4 items-center">
+                                <span>Preview</span>
+                                <div className="flex items-center gap-2">
+                                    {isProcessing && <span className="flex items-center gap-1 text-blue-600"><Loader2 className="w-3 h-3 animate-spin" /> Generating...</span>}
+                                    {pdfData && <button onClick={() => generateBinder('open')} className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-blue-600" title="Open in New Tab"><ExternalLink className="w-3 h-3" /></button>}
+                                </div>
+                            </div>
+                            <div className="flex-1 overflow-hidden relative bg-slate-300">
+                                {pdfData ? (
+                                    <PdfCanvasPreview pdfData={pdfData} />
                                 ) : (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
                                         <Eye className="w-12 h-12 mb-2 opacity-50" />
-                                        <p className="text-sm">Click "Update Preview" to compile and view your binder here.</p>
+                                        <p className="text-sm">Preview will appear here automatically.</p>
                                     </div>
                                 )}
                             </div>
@@ -1483,6 +1696,15 @@
                     </div>
                 </div>
             );
+        };
+
+        // Helper function for indentation classes
+        const getIndent = (depth) => {
+            switch(depth) {
+                case 1: return "pl-6 border-l-2 border-slate-100";
+                case 2: return "pl-12 border-l-2 border-slate-100";
+                default: return "";
+            }
         };
 
         const root = createRoot(document.getElementById('root'));
