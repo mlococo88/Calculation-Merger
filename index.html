@@ -157,53 +157,98 @@
         }
 
         // --- HELPER: BOOKMARK GENERATOR ---
+        // Robust Tree-Based Bookmark Generator for PDF-Lib
         const attachBookmarks = (pdfDoc, bookmarks) => {
             if (!bookmarks || bookmarks.length === 0) return;
-            try {
-                const { PDFName, PDFString } = window.PDFLib;
+            const { PDFName, PDFString, PDFNumber } = window.PDFLib;
+            const context = pdfDoc.context;
+            const outlinesDictRef = context.nextRef();
+
+            // 1. Build Tree Structure
+            const root = { children: [], count: 0, ref: outlinesDictRef }; 
+            let currentPath = [root]; // Stack of parents: [Root, Depth0, Depth1]
+
+            bookmarks.forEach((bm) => {
+                const node = { 
+                    title: bm.title, 
+                    pageRef: bm.page.ref, 
+                    children: [], 
+                    count: 0,
+                    ref: context.nextRef(), // Assign ref upfront
+                    parent: null
+                };
+
+                // Determine parent based on depth
+                // Depth 0 -> Parent is root (stack index 0)
+                // Depth 1 -> Parent is last Depth 0 (stack index 1)
+                // Ensure stack is appropriate size
+                while (currentPath.length > bm.depth + 1) {
+                    currentPath.pop();
+                }
+                // Fallback: if depth jumps (e.g. 0 -> 2), attach to nearest parent
+                const parent = currentPath[currentPath.length - 1];
                 
-                const outlinesDictRef = pdfDoc.context.nextRef();
-                const outlineItemRefs = bookmarks.map(() => pdfDoc.context.nextRef());
+                node.parent = parent;
+                parent.children.push(node);
+                
+                // Update Path: This node becomes the parent for the next deeper level
+                currentPath.push(node);
+            });
 
-                const outlineItems = bookmarks.map((bm, idx) => {
-                    const next = idx < bookmarks.length - 1 ? outlineItemRefs[idx + 1] : null;
-                    const prev = idx > 0 ? outlineItemRefs[idx - 1] : null;
-                    
-                    return {
-                        idx,
-                        title: bm.title,
-                        page: bm.page,
-                        parent: outlinesDictRef,
-                        next,
-                        prev,
-                        ref: outlineItemRefs[idx]
-                    };
-                });
+            // 2. Calculate Counts (Total Open Descendants)
+            // PDF spec: Count = total number of open items at all levels below this item.
+            // Positive = open, Negative = closed. We'll default to Open (Positive).
+            const calcCounts = (node) => {
+                let total = 0;
+                for (const child of node.children) {
+                    total += 1 + calcCounts(child); // 1 (child itself) + descendants
+                }
+                node.count = total;
+                return total;
+            };
+            calcCounts(root);
 
-                outlineItems.forEach(item => {
+            // 3. Construct PDF Objects
+            // Helper to process a list of siblings
+            const processSiblings = (siblings, parentRef) => {
+                siblings.forEach((node, i) => {
                     const map = new Map();
-                    map.set(PDFName.of('Title'), PDFString.of(item.title));
-                    map.set(PDFName.of('Parent'), item.parent);
-                    map.set(PDFName.of('Dest'), [item.page.ref, PDFName.of('Fit')]);
-                    
-                    if (item.next) map.set(PDFName.of('Next'), item.next);
-                    if (item.prev) map.set(PDFName.of('Prev'), item.prev);
-                    
-                    pdfDoc.context.assign(item.ref, pdfDoc.context.obj(map));
+                    map.set(PDFName.of('Title'), PDFString.of(node.title));
+                    map.set(PDFName.of('Parent'), parentRef);
+                    map.set(PDFName.of('Dest'), [node.pageRef, PDFName.of('Fit')]);
+
+                    // Prev/Next
+                    if (i > 0) map.set(PDFName.of('Prev'), siblings[i - 1].ref);
+                    if (i < siblings.length - 1) map.set(PDFName.of('Next'), siblings[i + 1].ref);
+
+                    // First/Last/Count (if children exist)
+                    if (node.children.length > 0) {
+                        map.set(PDFName.of('First'), node.children[0].ref);
+                        map.set(PDFName.of('Last'), node.children[node.children.length - 1].ref);
+                        map.set(PDFName.of('Count'), PDFNumber.of(node.count)); // Positive = Open
+                        
+                        // Recurse
+                        processSiblings(node.children, node.ref);
+                    }
+
+                    context.assign(node.ref, context.obj(map));
                 });
+            };
+
+            // Process Root's children
+            if (root.children.length > 0) {
+                processSiblings(root.children, outlinesDictRef);
 
                 const rootMap = new Map();
                 rootMap.set(PDFName.of('Type'), PDFName.of('Outlines'));
-                rootMap.set(PDFName.of('First'), outlineItemRefs[0]);
-                rootMap.set(PDFName.of('Last'), outlineItemRefs[outlineItemRefs.length - 1]);
-                rootMap.set(PDFName.of('Count'), pdfDoc.context.obj(bookmarks.length));
-                
-                pdfDoc.context.assign(outlinesDictRef, pdfDoc.context.obj(rootMap));
+                rootMap.set(PDFName.of('First'), root.children[0].ref);
+                rootMap.set(PDFName.of('Last'), root.children[root.children.length - 1].ref);
+                rootMap.set(PDFName.of('Count'), PDFNumber.of(root.count));
+
+                context.assign(outlinesDictRef, context.obj(rootMap));
 
                 pdfDoc.catalog.set(PDFName.of('Outlines'), outlinesDictRef);
                 pdfDoc.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'));
-            } catch (e) {
-                console.warn("Bookmark generation failed, skipping bookmarks.", e);
             }
         };
 
