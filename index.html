@@ -1184,7 +1184,9 @@
                     const fontOblique = await mergedPdf.embedFont(StandardFonts.HelveticaOblique);
                     const fonts = { fontBold, fontRegular, fontOblique };
 
-                    // Logo Fetch
+                    const parsedScale = parseFloat(logoScale) || 1.0;
+
+                    // --- LOGO EMBEDDING STRATEGY ---
                     let embeddedLogo = null;
                     if (logoUrl) { try { const res = await fetch(logoUrl); const logoBytes = await res.arrayBuffer(); const isPng = logoUrl.startsWith('data:image/png'); embeddedLogo = isPng ? await mergedPdf.embedPng(logoBytes) : await mergedPdf.embedJpg(logoBytes); } catch(e){} }
 
