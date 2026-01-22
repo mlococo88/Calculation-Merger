@@ -156,102 +156,6 @@
             }
         }
 
-        // --- HELPER: BOOKMARK GENERATOR ---
-        // Robust Tree-Based Bookmark Generator for PDF-Lib (Rewritten for reliability)
-        const attachBookmarks = (pdfDoc, bookmarks) => {
-            if (!bookmarks || bookmarks.length === 0) return;
-            try {
-                const { PDFName, PDFString, PDFNumber } = window.PDFLib;
-                const context = pdfDoc.context;
-                
-                // 1. Create Refs for everyone first
-                const rootRef = context.nextRef();
-                const items = bookmarks.map(b => ({
-                    ...b,
-                    ref: context.nextRef(),
-                    children: []
-                }));
-
-                // 2. Build the Tree Structure using a Stack
-                // The stack holds the current 'active' parent at each depth level
-                // Index 0 = Root (Depth -1 equivalent), Index 1 = Depth 0, Index 2 = Depth 1, etc.
-                const rootItem = { children: [], count: 0, ref: rootRef };
-                const stack = [rootItem]; 
-
-                for (const item of items) {
-                    // Ensure stack is the right size for this item's depth
-                    // If item is depth 0, we want stack size 1 (root)
-                    // If item is depth 1, we want stack size 2 (root + depth0 parent)
-                    while (stack.length > item.depth + 1) {
-                        stack.pop();
-                    }
-                    
-                    const parent = stack[stack.length - 1];
-                    item.parent = parent;
-                    parent.children.push(item);
-                    
-                    // This item might be a parent for the next one
-                    stack.push(item);
-                }
-
-                // 3. Recursive function to calculate counts and create dictionaries
-                // PDF 'Count' = Total number of open descendants at all levels
-                const processNode = (node) => {
-                    let totalDescendants = 0;
-                    
-                    for (let i = 0; i < node.children.length; i++) {
-                        const child = node.children[i];
-                        const childDescendants = processNode(child);
-                        totalDescendants += (1 + childDescendants); // 1 for the child itself + its descendants
-                        
-                        // Create Dictionary for Child
-                        const map = new Map();
-                        map.set(PDFName.of('Title'), PDFString.of(child.title));
-                        map.set(PDFName.of('Parent'), node.ref);
-                        map.set(PDFName.of('Dest'), [child.page.ref, PDFName.of('Fit')]); // Explicitly use page ref
-
-                        // Link Siblings
-                        if (i > 0) map.set(PDFName.of('Prev'), node.children[i - 1].ref);
-                        if (i < node.children.length - 1) map.set(PDFName.of('Next'), node.children[i + 1].ref);
-
-                        // Link Children
-                        if (child.children.length > 0) {
-                            map.set(PDFName.of('First'), child.children[0].ref);
-                            map.set(PDFName.of('Last'), child.children[child.children.length - 1].ref);
-                            map.set(PDFName.of('Count'), PDFNumber.of(childDescendants)); // Positive = Open
-                        }
-
-                        // Assign object to context
-                        context.assign(child.ref, context.obj(map));
-                    }
-                    return totalDescendants;
-                };
-
-                // 4. Process from Root
-                const totalOpen = processNode(rootItem);
-
-                // 5. Create Root Dictionary (The Catalog 'Outlines' entry)
-                const rootMap = new Map();
-                rootMap.set(PDFName.of('Type'), PDFName.of('Outlines'));
-                if (rootItem.children.length > 0) {
-                    rootMap.set(PDFName.of('First'), rootItem.children[0].ref);
-                    rootMap.set(PDFName.of('Last'), rootItem.children[rootItem.children.length - 1].ref);
-                    rootMap.set(PDFName.of('Count'), PDFNumber.of(totalOpen));
-                } else {
-                    rootMap.set(PDFName.of('Count'), PDFNumber.of(0));
-                }
-
-                context.assign(rootRef, context.obj(rootMap));
-
-                // 6. Link to Catalog
-                pdfDoc.catalog.set(PDFName.of('Outlines'), rootRef);
-                pdfDoc.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'));
-
-            } catch (e) {
-                console.error("Bookmark Generation Error:", e);
-            }
-        };
-
         // --- COMPONENT: PDF CANVAS PREVIEW ---
         // This replaces the <object> tag to ensure rendering in sandboxed environments
         const PdfCanvasPreview = ({ pdfData }) => {
@@ -395,10 +299,6 @@
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2"><input type="checkbox" defaultChecked className="rounded text-blue-600 focus:ring-blue-500" /><span className="text-sm text-slate-700 font-medium">Section Dividers</span></div>
                                     <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded">Enabled</span>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2"><input type="checkbox" checked disabled className="rounded text-blue-600 focus:ring-blue-500" /><span className="text-sm text-slate-700 font-medium">PDF Bookmarks</span></div>
-                                    <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">Active</span>
                                 </div>
                             </div>
                             
@@ -1474,18 +1374,10 @@
                     }
 
                     // --- SECTIONS ---
-                    const bookmarkList = []; // New Array to track bookmarks
                     
                     for (const f of numberedFiles) {
                         const divPage = mergedPdf.addPage(LETTER_SIZE);
                         drawFormalDivider(divPage, f, projectMeta, embeddedLogo, fonts, rgb);
-                        
-                        // Push to bookmark list
-                        bookmarkList.push({
-                            title: `${f.sectionLabel} ${f.sectionTitle}`,
-                            page: divPage,
-                            depth: f.depth // We can use this later for nesting if we upgrade
-                        });
                         
                         if (!f.isHeader) {
                             if (f.isPlaceholder) {
@@ -1514,8 +1406,7 @@
                         }
                     }
                     
-                    // --- ATTACH BOOKMARKS ---
-                    attachBookmarks(mergedPdf, bookmarkList);
+                    // --- BOOKMARKS REMOVED ---
 
                     // Page Numbers
                     const count = mergedPdf.getPageCount();
