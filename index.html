@@ -35,13 +35,17 @@
         import React, { useState, useRef, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
         
-        // Import Icons
+        // Import Icons (Broken into multiline to prevent parsing errors)
         import { 
             Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, 
             Trash2, Save, FilePlus, Settings, Eye, AlertCircle, List, 
-            Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, CheckSquare, Clock, 
-            Image as ImageIcon, X, FileQuestion, RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
-            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, ZapOff, Globe, Book, PenTool, ClipboardList, Type, Copy, GripVertical
+            Calendar, User, Hash, AlignLeft, AlignCenter, AlignRight, 
+            CheckSquare, Clock, Image as ImageIcon, X, FileQuestion, 
+            RefreshCw, Cloud, Check, Loader2, WifiOff, Lock, Key, 
+            RotateCcw, AlertTriangle, HelpCircle, HardDrive, Database,
+            FolderPlus, FolderOpen, MoreVertical, Layout, LogOut, Users, 
+            ZapOff, Globe, Book, PenTool, ClipboardList, Type, Copy, 
+            GripVertical, Maximize2
         } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- FIREBASE IMPORTS (v11.6.1) ---
@@ -689,6 +693,12 @@
                 if (!isOfflineMode) setSyncStatus('syncing');
 
                 for (const file of uploadedFiles) {
+                    // --- VALIDATION: Only allow PDFs ---
+                    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+                        console.warn(`Skipping non-PDF file: ${file.name}`);
+                        continue;
+                    }
+
                     let pageCount = 'Calc...', rawPages = 0;
                     try {
                         const arrayBuffer = await file.arrayBuffer();
@@ -845,7 +855,6 @@
                     id: crypto.randomUUID(), downloadURL: null, fileObj: null,
                     name: "Section Header", sectionTitle: "New Section", sectionSubtitle: "",
                     calcsBy: "", checkedBy: "", revision: "0", uploadDate: d, pageCount: 0, rawPages: 0, size: "N/A", depth: 0, 
-                    isPlaceholder: false, 
                     isHeader: true, // Distinct flag
                     objective: "", program: ""
                 }]);
