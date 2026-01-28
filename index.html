@@ -1594,11 +1594,24 @@
                                             <input type="text" value={file.sectionSubtitle} onChange={e => updateFileField(file.id, 'sectionSubtitle', e.target.value)} className="w-full text-xs text-slate-500 bg-transparent border-b border-transparent focus:border-blue-500 outline-none placeholder-slate-300" placeholder="Subtitle" />
                                             
                                             {!file.isHeader && (
-                                                <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-1">
-                                                    <span className={`font-medium truncate max-w-[150px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`}>{file.name}</span>
-                                                    <span>•</span>
-                                                    <span>{file.pageCount} pgs</span>
-                                                    {file.uploadDate && <span className="text-slate-500 ml-1">{file.uploadDate}</span>}
+                                                <div className="flex items-center justify-between mt-1 min-h-[20px]">
+                                                    <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                                        <span className={`font-medium truncate max-w-[150px] ${(!file.isPlaceholder && !file.fileObj && !file.downloadURL) ? 'text-red-500' : ''}`} title={file.name}>{file.name}</span>
+                                                        <span>•</span>
+                                                        <span>{file.pageCount} pgs</span>
+                                                    </div>
+                                                    
+                                                    <label className={`cursor-pointer text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${file.isPlaceholder ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-blue-600'}`}>
+                                                        {file.isPlaceholder ? <Upload className="w-3 h-3" /> : <RefreshCw className="w-3 h-3" />}
+                                                        <span>{file.isPlaceholder ? "Upload" : "Replace"}</span>
+                                                        <input 
+                                                            type="file" 
+                                                            accept=".pdf" 
+                                                            className="hidden" 
+                                                            onChange={(e) => file.isPlaceholder ? handleReplacePlaceholder(e, file.id) : handleReplaceFile(e, file.id)} 
+                                                            onClick={(e) => e.target.value = null}
+                                                        />
+                                                    </label>
                                                 </div>
                                             )}
                                         </div>
