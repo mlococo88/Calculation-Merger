@@ -18,8 +18,8 @@
         window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     </script>
 
-    <!-- Babel for JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Babel for JSX (Pinned to 7.23.6 to fix .targets error) -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
     <!-- Google Font (Noto Sans for consistency) -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -1374,10 +1374,13 @@
                     }
 
                     // --- SECTIONS ---
+                    // REMOVED: const bookmarkList = [];
                     
                     for (const f of numberedFiles) {
                         const divPage = mergedPdf.addPage(LETTER_SIZE);
                         drawFormalDivider(divPage, f, projectMeta, embeddedLogo, fonts, rgb);
+                        
+                        // REMOVED: Push to bookmark list
                         
                         if (!f.isHeader) {
                             if (f.isPlaceholder) {
@@ -1406,7 +1409,8 @@
                         }
                     }
                     
-                    // --- BOOKMARKS REMOVED ---
+                    // --- ATTACH BOOKMARKS REMOVED ---
+                    // attachBookmarks(mergedPdf, bookmarkList);
 
                     // Page Numbers
                     const count = mergedPdf.getPageCount();
@@ -1419,8 +1423,6 @@
                     }
 
                     const pdfBytes = await mergedPdf.save();
-                    // const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-                    // const url = URL.createObjectURL(blob);
                     
                     if (action === 'preview') {
                         setPdfData(pdfBytes);
