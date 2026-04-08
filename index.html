@@ -348,28 +348,118 @@
             );
         };
 
-        // --- COMPONENT: APP WRAPPER ---
-        // [NEW] Manages top-level auth state; gates CalcBinder behind login
-        const App = () => {
-            const [authUser, setAuthUser] = useState(null);
-            const [authChecked, setAuthChecked] = useState(false);
+        // --- CONSTANTS ---
+        const SESSION_DOC_PATH = ["artifacts", appId, "settings", "activeSession"];
+        const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+        const SESSION_TIMEOUT_MS    = 90 * 1000;
 
+        // --- COMPONENT: LOCKED SCREEN ---
+        const LockedScreen = ({ activeSession, onTakeOver, onSignOut }) => {
+            const [taking, setTaking] = useState(false);
+            const lastSeen = new Date(activeSession?.lastSeen || 0);
+            const secondsAgo = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
+            const handleTakeOver = async () => { setTaking(true); await onTakeOver(); setTaking(false); };
+            return (
+                <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+                    <div className="bg-white max-w-md w-full p-8 rounded-xl shadow-lg border border-slate-200 text-center">
+                        <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Lock className="w-8 h-8 text-amber-500" />
+                        </div>
+                        <h1 className="text-xl font-bold text-slate-800 mb-2">App Currently In Use</h1>
+                        <p className="text-sm text-slate-500 mb-6">Another user is currently active. Only one session is allowed at a time.</p>
+                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 text-left space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                                <span className="text-slate-500 font-medium">Active user</span>
+                                <span className="font-semibold text-slate-800 truncate max-w-[200px]">{activeSession?.email || "Unknown"}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                                <span className="text-slate-500 font-medium">Last seen</span>
+                                <span className={}>
+                                    {secondsAgo < 5 ? "Just now" : }
+                                </span>
+                            </div>
+                        </div>
+                        <div className="space-y-3">
+                            <button onClick={handleTakeOver} disabled={taking} className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+                                {taking ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertTriangle className="w-4 h-4" />}
+                                {taking ? "Taking over..." : "Take Over Session"}
+                            </button>
+                            <p className="text-[10px] text-slate-400">This will disconnect the current user immediately.</p>
+                            <button onClick={onSignOut} className="w-full py-2 text-slate-500 hover:text-red-600 text-sm font-medium transition-colors flex items-center justify-center gap-2">
+                                <LogOut className="w-4 h-4" /> Sign Out
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- COMPONENT: APP WRAPPER ---
+        const App = () => {
+            const [authUser, setAuthUser]           = useState(null);
+            const [authChecked, setAuthChecked]     = useState(false);
+            const [sessionState, setSessionState]   = useState("checking");
+            const [activeSession, setActiveSession] = useState(null);
+            const sessionIdRef = useRef(crypto.randomUUID());
+
+            const claimSession = async (user) => {
+                const sessionRef = doc(db, ...SESSION_DOC_PATH);
+                await setDoc(sessionRef, { uid: user.uid, email: user.email, sessionId: sessionIdRef.current, lastSeen: new Date().toISOString() });
+            };
+
+            // Heartbeat
+            useEffect(() => {
+                if (sessionState !== "owner" || !authUser) return;
+                const beat = async () => { try { const sessionRef = doc(db, ...SESSION_DOC_PATH); await setDoc(sessionRef, { lastSeen: new Date().toISOString() }, { merge: true }); } catch(e) { console.warn("Heartbeat failed", e); } };
+                const interval = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+                return () => clearInterval(interval);
+            }, [sessionState, authUser]);
+
+            // Watch session doc
+            useEffect(() => {
+                if (!authUser) return;
+                const sessionRef = doc(db, ...SESSION_DOC_PATH);
+                const unsub = onSnapshot(sessionRef, (snap) => {
+                    if (!snap.exists()) { claimSession(authUser).then(() => setSessionState("owner")); return; }
+                    const data = snap.data();
+                    setActiveSession(data);
+                    const isExpired = (Date.now() - new Date(data.lastSeen || 0).getTime()) > SESSION_TIMEOUT_MS;
+                    const isOurs = data.sessionId === sessionIdRef.current;
+                    if (isOurs) { setSessionState("owner"); }
+                    else if (isExpired) { claimSession(authUser).then(() => setSessionState("owner")); }
+                    else { setSessionState("locked"); }
+                });
+                return () => unsub();
+            }, [authUser]);
+
+            // Sign out and release session
+            const handleSignOut = async () => {
+                if (sessionState === "owner") { try { await deleteDoc(doc(db, ...SESSION_DOC_PATH)); } catch(e) {} }
+                await signOut(auth);
+            };
+
+            // Take over session
+            const handleTakeOver = async () => { await claimSession(authUser); };
+
+            // Auth state listener
             useEffect(() => {
                 const unsub = onAuthStateChanged(auth, async (user) => {
-                    // [FIX] If a persisted anonymous session exists from the old app,
-                    // sign it out immediately and require a real email/password login.
-                    if (user && user.isAnonymous) {
-                        await signOut(auth);
-                        setAuthUser(null);
-                    } else {
-                        setAuthUser(user);
-                    }
+                    if (user && user.isAnonymous) { await signOut(auth); setAuthUser(null); setSessionState("checking"); }
+                    else { setAuthUser(user || null); if (!user) setSessionState("checking"); }
                     setAuthChecked(true);
                 });
                 return () => unsub();
             }, []);
 
-            if (!authChecked) {
+            // Release session on tab close
+            useEffect(() => {
+                if (sessionState !== "owner" || !authUser) return;
+                const handleUnload = () => { deleteDoc(doc(db, ...SESSION_DOC_PATH)).catch(() => {}); };
+                window.addEventListener("beforeunload", handleUnload);
+                return () => window.removeEventListener("beforeunload", handleUnload);
+            }, [sessionState, authUser]);
+
+            if (!authChecked || (authUser && sessionState === "checking")) {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-slate-50">
                         <div className="flex items-center gap-3 text-slate-500">
@@ -379,13 +469,13 @@
                     </div>
                 );
             }
-
             if (!authUser) return <LoginScreen />;
-            return <CalcBinder />;
+            if (sessionState === "locked") return <LockedScreen activeSession={activeSession} onTakeOver={handleTakeOver} onSignOut={handleSignOut} />;
+            return <CalcBinder onSignOut={handleSignOut} />;
         };
 
         // --- COMPONENT: CALC BINDER (main app) ---
-        const CalcBinder = () => {
+        const CalcBinder = ({ onSignOut }) => {
             const [user, setUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState('connecting');
             const [authError, setAuthError] = useState(null);
@@ -478,16 +568,8 @@
             const moveFile = (index, direction) => { if ((direction === -1 && index === 0) || (direction === 1 && index === files.length - 1)) return; const newFiles = [...files]; const temp = newFiles[index]; newFiles[index] = newFiles[index + direction]; newFiles[index + direction] = temp; if (index + direction === 0) newFiles[index + direction].depth = 0; setFiles(newFiles); };
             const changeDepth = (index, delta) => { const newFiles = [...files]; const newDepth = newFiles[index].depth + delta; if (newDepth >= 0 && newDepth <= 2 && !(index === 0 && newDepth > 0)) { newFiles[index].depth = newDepth; setFiles(newFiles); } };
 
-            // [CHANGED] Logout now calls signOut(auth) — no page reload or localStorage clear needed.
-            // The App wrapper's onAuthStateChanged detects the sign-out and shows LoginScreen automatically.
-            const handleLogout = async () => {
-                try {
-                    await signOut(auth);
-                } catch (e) {
-                    console.error("Sign out error", e);
-                    window.location.reload(); // fallback
-                }
-            };
+            // Logout delegated to App wrapper which also clears the session doc
+            const handleLogout = onSignOut;
 
             const handleUpdateFileDetails = (fileId, newDetails) => { setFiles(prev => prev.map(f => f.id === fileId ? { ...f, ...newDetails } : f)); };
 
