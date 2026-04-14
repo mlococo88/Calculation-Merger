@@ -455,6 +455,7 @@
             const [customCoverUrl, setCustomCoverUrl] = useState(null);  // Storage URL for custom cover PDF
             const [customCoverUploading, setCustomCoverUploading] = useState(false);
             const customCoverInputRef = useRef(null);
+            const [themeColor, setThemeColor] = useState('#377F99'); // brand blue default
             const [bookmarksEnabled, setBookmarksEnabled] = useState(true);
             const [watermarkEnabled, setWatermarkEnabled] = useState(false);
             const [watermarkText, setWatermarkText] = useState('DRAFT');
@@ -471,7 +472,7 @@
             useEffect(()=>{ if (pdfLibLoaded&&files.length>0&&!pdfData&&!isProcessing){const t=setTimeout(()=>generateBinder('preview',true),500);return()=>clearTimeout(t);} },[pdfLibLoaded,files,pdfData,isProcessing]);
 
             // Auto preview
-            useEffect(()=>{ if (!autoUpdate||files.length===0) return; const t=setTimeout(()=>generateBinder('preview',true),1500); return()=>clearTimeout(t); },[files,projectMeta,logoUrl,coverImageUrl,coverImagePreview,customCoverUrl,logoScale,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,autoUpdate]);
+            useEffect(()=>{ if (!autoUpdate||files.length===0) return; const t=setTimeout(()=>generateBinder('preview',true),1500); return()=>clearTimeout(t); },[files,projectMeta,logoUrl,coverImageUrl,coverImagePreview,customCoverUrl,themeColor,logoScale,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,autoUpdate]);
 
             // Auth + projects
             useEffect(()=>{ return onAuthStateChanged(auth,async(cu)=>{ if(cu){ setUser(cu); setSyncStatus('synced'); setAuthError(null); const pr=collection(db,"artifacts",appId,"public","data","projects"); return onSnapshot(pr,(snap)=>{ const pl=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>new Date(b.lastModified)-new Date(a.lastModified)); setProjects(pl); const cid=activeProjectIdRef.current; if (pl.length>0){if(!cid)setActiveProjectId(pl[0].id);else if(!pl.find(p=>p.id===cid))setActiveProjectId(pl[0].id);} else handleCreateProject(cu.uid,"New Project"); },(e)=>setAuthError("DB Access Denied.")); } }); },[]);
@@ -483,6 +484,7 @@
                             setCoverImageUrl(prev=>prev===d.coverImageUrl?prev:d.coverImageUrl);
                         }
                         if(d.customCoverUrl!==undefined)setCustomCoverUrl(prev=>prev===d.customCoverUrl?prev:d.customCoverUrl);
+                        if(d.themeColor!==undefined)setThemeColor(prev=>prev===d.themeColor?prev:d.themeColor);
                         if(d.bookmarksEnabled!==undefined)setBookmarksEnabled(d.bookmarksEnabled);
                         if(d.watermarkEnabled!==undefined)setWatermarkEnabled(d.watermarkEnabled);
                         if(d.watermarkText!==undefined)setWatermarkText(d.watermarkText);
@@ -490,7 +492,27 @@
                         setSyncStatus('synced'); } }); },[user,activeProjectId]);
 
             // Auto-save
-            useEffect(()=>{ const save=async()=>{ if(user&&activeProjectId&&syncStatus!=='connecting'&&syncStatus!=='error'){ setSyncStatus('syncing'); try{ await setDoc(doc(db,"artifacts",appId,"public","data","projects",activeProjectId),{projectMeta,files:files.map(({fileObj,...r})=>r),logoUrl,coverImageUrl:(!coverImageUrl||coverImageUrl.startsWith('data:'))?null:coverImageUrl,customCoverUrl,logoScale:parseFloat(logoScale)||1,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,lastModified:new Date().toISOString(),modifiedBy:user.uid},{merge:true}); setSyncStatus('synced'); }catch(e){setSyncStatus('error');} } }; const t=setTimeout(save,2000); return()=>clearTimeout(t); },[files,projectMeta,logoUrl,coverImageUrl,coverImagePreview,customCoverUrl,logoScale,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,user,syncStatus,activeProjectId]);
+            useEffect(()=>{ const save=async()=>{ if(user&&activeProjectId&&syncStatus!=='connecting'&&syncStatus!=='error'){ setSyncStatus('syncing'); try{ await setDoc(doc(db,"artifacts",appId,"public","data","projects",activeProjectId),{projectMeta,files:files.map(({fileObj,...r})=>r),logoUrl,coverImageUrl:(!coverImageUrl||coverImageUrl.startsWith('data:'))?null:coverImageUrl,customCoverUrl,themeColor,logoScale:parseFloat(logoScale)||1,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,lastModified:new Date().toISOString(),modifiedBy:user.uid},{merge:true}); setSyncStatus('synced'); }catch(e){setSyncStatus('error');} } }; const t=setTimeout(save,2000); return()=>clearTimeout(t); },[files,projectMeta,logoUrl,coverImageUrl,coverImagePreview,customCoverUrl,themeColor,logoScale,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,user,syncStatus,activeProjectId]);
+
+            // Dynamic theme color — update CSS variables when themeColor changes
+            useEffect(()=>{
+                const root = document.documentElement;
+                const hex = themeColor;
+                const toRgb = (h) => {
+                    const c = h.replace('#','');
+                    return [parseInt(c.slice(0,2),16), parseInt(c.slice(2,4),16), parseInt(c.slice(4,6),16)];
+                };
+                const blend = (rgb, f) => rgb.map(v => Math.round(v*f));
+                const blendW = (rgb, f) => rgb.map(v => Math.round(v+(255-v)*f));
+                const toHex = (rgb) => '#'+rgb.map(v=>v.toString(16).padStart(2,'0')).join('');
+                if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return;
+                const base = toRgb(hex);
+                root.style.setProperty('--brand-blue', hex);
+                root.style.setProperty('--brand-blue-dk', toHex(blend(base, 0.72)));
+                root.style.setProperty('--brand-blue-md', toHex(blend(base, 0.85)));
+                root.style.setProperty('--brand-blue-lt', toHex(blendW(base, 0.3)));
+                root.style.setProperty('--brand-blue-pl', toHex(blendW(base, 0.88)));
+            }, [themeColor]);
 
             // Keyboard shortcuts
             useEffect(()=>{ const handler = (e) => {
@@ -640,18 +662,18 @@
                     const margin=40,cw=width-(margin*2);
                     // Header bar
                     const logoReserve = embLogo ? 110 : 0;
-                    page.drawRectangle({x:0,y:height-70,width:width,height:70,color:rgb(0.149,0.373,0.459)});
+                    page.drawRectangle({x:0,y:height-70,width:width,height:70,color:rgb(...themeDark)});
                     // Logo — top right, contained within the band
                     if (embLogo){const lh=44;const sc=lh/embLogo.height;const lw=Math.min(embLogo.width*sc,100);page.drawImage(embLogo,{x:width-margin-lw,y:height-58,width:lw,height:lh});}
                     // Project label + number on one line
-                    page.drawText(`PROJECT:  ${cleanText(projMeta.number)}`,{x:margin,y:height-18,size:7,font:fontBold,color:rgb(0.761,0.875,0.914)});
+                    page.drawText(`PROJECT:  ${cleanText(projMeta.number)}`,{x:margin,y:height-18,size:7,font:fontBold,color:rgb(...themePale)});
                     // Project title below, respecting logo space
                     const projLines=getWrappedLines(cleanText(projMeta.title),11,fontBold,cw-logoReserve-10);
                     projLines.slice(0,2).forEach((l,i)=>page.drawText(l,{x:margin,y:height-34-(i*14),size:11,font:fontBold,color:rgb(1,1,1)}));
                     // Section info
                     const tY=height-130;
                     const statusObj=STATUS_OPTIONS.find(s=>s.value===fileData.status)||STATUS_OPTIONS[0];
-                    page.drawText(`SECTION ${fileData.sectionLabel}`,{x:margin,y:tY,size:22,font:fontBold,color:rgb(0.149,0.373,0.459)});
+                    page.drawText(`SECTION ${fileData.sectionLabel}`,{x:margin,y:tY,size:22,font:fontBold,color:rgb(...themeDark)});
                     drawWrappedText(page,fileData.sectionTitle||"Untitled",tY-30,16,fontBold,rgb,[0,0,0],cw-100,'left');
                     if(fileData.sectionSubtitle)drawWrappedText(page,fileData.sectionSubtitle,tY-52,12,fontRegular,rgb,[0.3,0.3,0.3],cw-100,'left');
                     // Status badge
@@ -677,7 +699,7 @@
                         cell(0,"DESIGNED BY",fileData.designedBy,fileData.designedDate);
                         cell(1,"CHECKED BY",fileData.checkedBy,fileData.checkedDate);
                         cell(2,"QC REVIEW BY",fileData.qcReviewBy,fileData.qcReviewDate);
-                        if(fileData.revision)page.drawText(`REV: ${fileData.revision}`,{x:width-margin-90,y:tY-10,size:9,font:fontBold,color:rgb(0.149,0.373,0.459)});
+                        if(fileData.revision)page.drawText(`REV: ${fileData.revision}`,{x:width-margin-90,y:tY-10,size:9,font:fontBold,color:rgb(...themeDark)});
                     }
                 } catch(e){ console.error("Divider error",e); }
             };
@@ -780,6 +802,19 @@
                 }
             };
 
+            // --- HEX TO RGB HELPER ---
+            const hexToRgb01 = (hex) => {
+                const clean = hex.replace('#','');
+                const r = parseInt(clean.substring(0,2),16)/255;
+                const g = parseInt(clean.substring(2,4),16)/255;
+                const b = parseInt(clean.substring(4,6),16)/255;
+                return [r, g, b];
+            };
+            // Darken a [r,g,b] color by a factor (0=black, 1=unchanged)
+            const darken = ([r,g,b], f=0.75) => [r*f, g*f, b*f];
+            // Lighten toward white by factor
+            const lighten = ([r,g,b], f=0.85) => [r+(1-r)*f, g+(1-g)*f, b+(1-b)*f];
+
             // --- GENERATE BINDER ---
             const generateBinder = async (action='download', isAuto=false, singleFileId=null) => {
                 if (!isAuto) setIsProcessing(true);
@@ -790,6 +825,12 @@
                 }
                 try {
                     const {PDFDocument,StandardFonts,rgb}=window.PDFLib;
+                    // Theme color derived values (hex → pdf-lib rgb floats)
+                    const themePrimary = hexToRgb01(themeColor);
+                    const themeDark    = darken(themePrimary, 0.72);
+                    const themeAccent  = themePrimary;
+                    const themePale    = lighten(themePrimary, 0.88);
+                    const themeText    = darken(themePrimary, 0.65);
                     const pdf=await PDFDocument.create();
                     const fontBold=await pdf.embedFont(StandardFonts.HelveticaBold);
                     const fontRegular=await pdf.embedFont(StandardFonts.Helvetica);
@@ -841,20 +882,20 @@
                     }
 
                     // Top band
-                    cover.drawRectangle({x:0,y:height-120,width:width,height:120,color:rgb(0.149,0.373,0.459)});
+                    cover.drawRectangle({x:0,y:height-120,width:width,height:120,color:rgb(...themeDark)});
                     if(embLogo){const ls=52/embLogo.height;const lw=embLogo.width*ls;cover.drawImage(embLogo,{x:(width-lw)/2,y:height-96,width:lw,height:52});}
                     // Accent stripe
-                    cover.drawRectangle({x:0,y:height-124,width:width,height:4,color:rgb(0.216,0.498,0.600)});
+                    cover.drawRectangle({x:0,y:height-124,width:width,height:4,color:rgb(...themeAccent)});
                     // Bottom band
-                    cover.drawRectangle({x:0,y:0,width:width,height:30,color:rgb(0.149,0.373,0.459)});
+                    cover.drawRectangle({x:0,y:0,width:width,height:30,color:rgb(...themeDark)});
 
                     // Title block — same position in both layouts
                     const titleY = height - 168;
-                    drawWrappedText(cover, projectMeta.title.toUpperCase(), titleY, 20, fontBold, rgb, [0.149,0.373,0.459], width-80);
+                    drawWrappedText(cover, projectMeta.title.toUpperCase(), titleY, 20, fontBold, rgb, themeDark, width-80);
 
                     // Accent line below title
                     const accentY = titleY - 30;
-                    cover.drawLine({start:{x:60,y:accentY},end:{x:width-60,y:accentY},thickness:0.75,color:rgb(0.216,0.498,0.600)});
+                    cover.drawLine({start:{x:60,y:accentY},end:{x:width-60,y:accentY},thickness:0.75,color:rgb(...themeAccent)});
 
                     // Doc type below accent
                     drawWrappedText(cover, (projectMeta.docType||"CALCULATION PACKAGE").toUpperCase(), accentY-18, 11, fontRegular, rgb, [0.35,0.35,0.35], width-80);
@@ -913,9 +954,9 @@
                     for(let p=0;p<tocPgs;p++){
                         const tp=pdf.addPage(SZ);
                         // TOC header
-                        tp.drawRectangle({x:0,y:height-55,width:width,height:55,color:rgb(0.149,0.373,0.459)});
+                        tp.drawRectangle({x:0,y:height-55,width:width,height:55,color:rgb(...themeDark)});
                         tp.drawText("TABLE OF CONTENTS",{x:40,y:height-35,size:18,font:fontBold,color:rgb(1,1,1)});
-                        tp.drawText(`${projectMeta.number} — ${cleanText(projectMeta.title)}`,{x:40,y:height-50,size:7,font:fontRegular,color:rgb(0.761,0.875,0.914)});
+                        tp.drawText(`${projectMeta.number} — ${cleanText(projectMeta.title)}`,{x:40,y:height-50,size:7,font:fontRegular,color:rgb(...themePale)});
                         let yPos=height-80;
                         for(let i=p*epp;i<Math.min((p+1)*epp,analysis.length);i++){
                             const item=analysis[i];
@@ -1085,9 +1126,9 @@
                     const analysis=numberedFiles.map(f=>{const e={...f,startPage:rpn+1};rpn+=f.isHeader?1:(1+(f.rawPages||1));return e;});
                     for(let p=0;p<tocPgs;p++){
                         const tp=pdf.addPage(SZ);
-                        tp.drawRectangle({x:0,y:height-55,width:width,height:55,color:rgb(0.149,0.373,0.459)});
+                        tp.drawRectangle({x:0,y:height-55,width:width,height:55,color:rgb(...themeDark)});
                         tp.drawText("TABLE OF CONTENTS",{x:40,y:height-35,size:18,font:fontBold,color:rgb(1,1,1)});
-                        tp.drawText(`${projectMeta.number} — ${cleanText(projectMeta.title)}`,{x:40,y:height-50,size:7,font:fontRegular,color:rgb(0.761,0.875,0.914)});
+                        tp.drawText(`${projectMeta.number} — ${cleanText(projectMeta.title)}`,{x:40,y:height-50,size:7,font:fontRegular,color:rgb(...themePale)});
                         let yPos=height-80;
                         for(let i=p*epp;i<Math.min((p+1)*epp,analysis.length);i++){
                             const item=analysis[i]; const indent=item.depth===0?40:item.depth===1?60:80;
@@ -1167,6 +1208,54 @@
                                         <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-0.5">Number</label><input type="text" value={projectMeta.number} onChange={e=>updateMeta('number',e.target.value)} className="w-full px-2 py-1 text-sm border border-slate-300 rounded outline-none"/></div>
                                         <div><label className="block text-[10px] font-bold text-slate-400 uppercase mb-0.5">Date</label><input type="date" value={projectMeta.date} onChange={e=>updateMeta('date',e.target.value)} className="w-full px-2 py-1 text-sm border border-slate-300 rounded outline-none"/></div>
                                         <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 uppercase mb-0.5">Client</label><input type="text" value={projectMeta.client} onChange={e=>updateMeta('client',e.target.value)} className="w-full px-2 py-1 text-sm border border-slate-300 rounded outline-none"/></div>
+                                        <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 uppercase mb-0.5">Description <span className="normal-case font-normal text-slate-300">(appears on cover page)</span></label><input type="text" value={projectMeta.description||''} onChange={e=>updateMeta('description',e.target.value)} placeholder="e.g. Structural analysis of primary framing members" className="w-full px-2 py-1 text-sm border border-slate-300 rounded outline-none placeholder-slate-300"/></div>
+                                        <div className="col-span-2">
+                                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Theme Color</label>
+                                            <div className="flex items-center gap-3">
+                                                {/* Color wheel input */}
+                                                <div className="relative shrink-0">
+                                                    <input
+                                                        type="color"
+                                                        value={themeColor}
+                                                        onChange={e=>setThemeColor(e.target.value)}
+                                                        className="w-10 h-10 rounded-full cursor-pointer border-2 border-slate-200 p-0.5"
+                                                        title="Pick theme color"
+                                                        style={{appearance:'none',backgroundColor:'transparent'}}
+                                                    />
+                                                </div>
+                                                {/* Hex input */}
+                                                <input
+                                                    type="text"
+                                                    value={themeColor}
+                                                    onChange={e=>{ if(/^#[0-9A-Fa-f]{0,6}$/.test(e.target.value)) setThemeColor(e.target.value); }}
+                                                    className="w-24 px-2 py-1 text-sm border border-slate-300 rounded outline-none font-mono uppercase"
+                                                    maxLength={7}
+                                                    placeholder="#377F99"
+                                                />
+                                                {/* Preset swatches */}
+                                                <div className="flex gap-1.5 flex-wrap">
+                                                    {[
+                                                        {c:'#377F99', label:'Brand Blue'},
+                                                        {c:'#265f75', label:'Dark Blue'},
+                                                        {c:'#C8102E', label:'Brand Red'},
+                                                        {c:'#54585A', label:'Brand Gray'},
+                                                        {c:'#1a1a2e', label:'Navy'},
+                                                        {c:'#2d6a4f', label:'Forest'},
+                                                        {c:'#6d28d9', label:'Purple'},
+                                                        {c:'#b45309', label:'Amber'},
+                                                    ].map(({c,label})=>(
+                                                        <button
+                                                            key={c}
+                                                            title={label}
+                                                            onClick={()=>setThemeColor(c)}
+                                                            className="w-5 h-5 rounded-full border-2 transition-transform hover:scale-110"
+                                                            style={{backgroundColor:c, borderColor: themeColor===c ? '#000' : 'transparent'}}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <p className="text-[10px] text-slate-400 mt-1">Applied to PDF header bands, cover page, dividers, and TOC.</p>
+                                        </div>
                                         {/* Custom cover PDF upload */}
                                         <div className="col-span-2">
                                             <label className="block text-[10px] font-bold text-slate-400 uppercase mb-0.5">Custom Cover Page <span className="normal-case font-normal text-slate-300">(PDF · optional)</span></label>
