@@ -68,7 +68,7 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useRef, useMemo, useEffect, useCallback } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
-        import { Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, Trash2, Save, FilePlus, Settings, Eye, AlertCircle, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, X, FileQuestion, RefreshCw, Check, Loader2, Lock, Key, RotateCcw, AlertTriangle, FolderPlus, Layout, LogOut, Globe, PenTool, ClipboardList, Type, Copy, GripVertical, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Search, Tag, FileDown, Clock, User, Hash } from 'https://esm.sh/lucide-react@0.263.1';
+        import { Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, Trash2, Save, FilePlus, Settings, Eye, AlertCircle, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, X, FileQuestion, RefreshCw, Check, Loader2, Lock, Key, RotateCcw, AlertTriangle, FolderPlus, Layout, LogOut, Globe, PenTool, ClipboardList, Type, Copy, GripVertical, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Search, Tag, FileDown, Clock, User, Hash, MessageSquare, Send, Trash, Mail } from 'https://esm.sh/lucide-react@0.263.1';
         import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
@@ -232,7 +232,7 @@
         );
 
         // --- COVER SHEET MODAL ---
-        const CoverSheetModal = ({ file, projectMeta, onClose, onSave }) => {
+        const CoverSheetModal = ({ file, projectMeta, onClose, onSave, onNotify }) => {
             const [data, setData] = useState({ sectionTitle: file.sectionTitle||"", sectionSubtitle: file.sectionSubtitle||"", designedBy: file.designedBy||file.calcsBy||"", designedDate: file.designedDate||"", checkedBy: file.checkedBy||"", checkedDate: file.checkedDate||"", qcReviewBy: file.qcReviewBy||"", qcReviewDate: file.qcReviewDate||"", revision: file.revision||"0", status: file.status||"draft" });
             const [customFields, setCustomFields] = useState((file.customFields||[{id:1,label:"Objective / Scope",value:file.objective||"",isVisible:true},{id:2,label:"Design Code / References",value:file.references||"",isVisible:true},{id:3,label:"Computer Program",value:file.program||"",isVisible:true},{id:4,label:"Conclusions",value:file.conclusions||"",isVisible:true}]).map(f=>({...f,isEditingLabel:false})));
             const hc = (f,v) => setData(p=>({...p,[f]:v}));
@@ -300,9 +300,14 @@
                                 </div>
                             )}
                         </div>
-                        <div className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end gap-2">
-                            <button onClick={onClose} className="px-4 py-2 text-slate-600 font-medium hover:bg-slate-200 rounded">Cancel</button>
-                            <button onClick={handleSave} className="px-4 py-2 bg-brand-blue text-white font-medium hover:bg-brand-blue-dk rounded flex items-center gap-2"><Check className="w-4 h-4"/> Save Details</button>
+                        <div className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-between items-center gap-2">
+                            <button onClick={()=>{ onClose(); setTimeout(()=>onNotify({...file,...data}),100); }} className="flex items-center gap-2 px-3 py-2 text-emerald-600 font-medium hover:bg-emerald-50 rounded text-sm border border-emerald-200">
+                                <Mail className="w-4 h-4"/> Notify Reviewer
+                            </button>
+                            <div className="flex gap-2">
+                                <button onClick={onClose} className="px-4 py-2 text-slate-600 font-medium hover:bg-slate-200 rounded">Cancel</button>
+                                <button onClick={handleSave} className="px-4 py-2 bg-brand-blue text-white font-medium hover:bg-brand-blue-dk rounded flex items-center gap-2"><Check className="w-4 h-4"/> Save Details</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -450,6 +455,13 @@
             const [searchQuery, setSearchQuery] = useState('');
             const [selectedFileId, setSelectedFileId] = useState(null);
             const [dragItem, setDragItem] = useState(null), [dragOverIndex, setDragOverIndex] = useState(null), [isDraggingFile, setIsDraggingFile] = useState(false);
+            const [activeCommentSectionId, setActiveCommentSectionId] = useState(null); // which section's comments are open
+            const [comments, setComments] = useState({}); // { [sectionId]: [{uid,email,text,timestamp}] }
+            const [commentInput, setCommentInput] = useState('');
+            const [commentSending, setCommentSending] = useState(false);
+            const [seenComments, setSeenComments] = useState({}); // { [sectionId]: count } — stored in localStorage
+            const commentInputRef = useRef(null);
+            const commentFeedRef = useRef(null);
             const [projectMeta, setProjectMeta] = useState({ title:"Structural Calculation Package", number:"2025-001", client:"Client Name", date:new Date().toISOString().split('T')[0], description:"Structural analysis and design of primary framing members.", docType:"CALCULATION PACKAGE" });
             const [logoUrl, setLogoUrl] = useState(null), [logoScale, setLogoScale] = useState("1.0");
             const [coverImageUrl, setCoverImageUrl] = useState(null);    // Storage URL — saved to Firestore
@@ -496,6 +508,82 @@
 
             // Auto-save
             useEffect(()=>{ const save=async()=>{ if(user&&activeProjectId&&syncStatus!=='connecting'&&syncStatus!=='error'){ setSyncStatus('syncing'); try{ await setDoc(doc(db,"artifacts",appId,"public","data","projects",activeProjectId),{projectMeta,files:files.map(({fileObj,...r})=>r),logoUrl,coverImageUrl:(!coverImageUrl||coverImageUrl.startsWith('data:'))?null:coverImageUrl,customCoverUrl,themeColor,logoScale:parseFloat(logoScale)||1,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,lastModified:new Date().toISOString(),modifiedBy:user.uid},{merge:true}); setSyncStatus('synced'); }catch(e){setSyncStatus('error');} } }; const t=setTimeout(save,2000); return()=>clearTimeout(t); },[files,projectMeta,logoUrl,coverImageUrl,coverImagePreview,customCoverUrl,themeColor,logoScale,pageNumberPos,showPageHeader,bookmarksEnabled,watermarkEnabled,watermarkText,watermarkPages,user,syncStatus,activeProjectId]);
+
+            // ── COMMENTS ────────────────────────────────────────────────────────────
+
+            // Load seen counts from localStorage on mount
+            useEffect(()=>{
+                try {
+                    const saved = localStorage.getItem('calcBinder_seenComments');
+                    if (saved) setSeenComments(JSON.parse(saved));
+                } catch(e) {}
+            }, []);
+
+            // Listen to comments collection for active project
+            useEffect(()=>{
+                if (!user || !activeProjectId) return;
+                const commentsRef = collection(db, "artifacts", appId, "public", "data", "projects", activeProjectId, "comments");
+                const unsub = onSnapshot(commentsRef, (snap) => {
+                    const data = {};
+                    snap.docs.forEach(doc => { data[doc.id] = doc.data().messages || []; });
+                    setComments(data);
+                });
+                return () => unsub();
+            }, [user, activeProjectId]);
+
+            // Scroll to bottom of feed when comments open or new message arrives
+            useEffect(()=>{
+                if (commentFeedRef.current) {
+                    commentFeedRef.current.scrollTop = commentFeedRef.current.scrollHeight;
+                }
+            }, [activeCommentSectionId, comments]);
+
+            // Mark comments as seen when panel opens
+            useEffect(()=>{
+                if (!activeCommentSectionId) return;
+                const count = (comments[activeCommentSectionId] || []).length;
+                const updated = { ...seenComments, [activeCommentSectionId]: count };
+                setSeenComments(updated);
+                try { localStorage.setItem('calcBinder_seenComments', JSON.stringify(updated)); } catch(e) {}
+            }, [activeCommentSectionId, comments]);
+
+            const handleSendComment = async () => {
+                if (!commentInput.trim() || !activeCommentSectionId || commentSending) return;
+                setCommentSending(true);
+                try {
+                    const commentRef = doc(db, "artifacts", appId, "public", "data", "projects", activeProjectId, "comments", activeCommentSectionId);
+                    const existing = comments[activeCommentSectionId] || [];
+                    const newMessage = {
+                        uid: user.uid,
+                        email: user.email,
+                        name: user.email.split('@')[0],
+                        text: commentInput.trim(),
+                        timestamp: new Date().toISOString(),
+                    };
+                    await setDoc(commentRef, { messages: [...existing, newMessage] }, { merge: false });
+                    setCommentInput('');
+                    setTimeout(() => commentInputRef.current?.focus(), 50);
+                } catch(e) { console.error("Comment send failed", e); }
+                finally { setCommentSending(false); }
+            };
+
+            const handleDeleteComment = async (sectionId, index) => {
+                try {
+                    const commentRef = doc(db, "artifacts", appId, "public", "data", "projects", activeProjectId, "comments", sectionId);
+                    const updated = (comments[sectionId] || []).filter((_, i) => i !== index);
+                    await setDoc(commentRef, { messages: updated }, { merge: false });
+                } catch(e) { console.error("Delete failed", e); }
+            };
+
+            const getUnreadCount = (sectionId) => {
+                const total = (comments[sectionId] || []).length;
+                const seen = seenComments[sectionId] || 0;
+                return Math.max(0, total - seen);
+            };
+
+            const totalComments = (sectionId) => (comments[sectionId] || []).length;
+
+            // ── END COMMENTS ─────────────────────────────────────────────────────────
 
             // Dynamic theme color — update CSS variables when themeColor changes
             useEffect(()=>{
@@ -642,6 +730,48 @@
             const moveFile = (idx,dir) => { if((dir===-1&&idx===0)||(dir===1&&idx===files.length-1)) return; const nf=[...files]; [nf[idx],nf[idx+dir]]=[nf[idx+dir],nf[idx]]; if(idx+dir===0)nf[0].depth=0; setFiles(nf); };
             const changeDepth = (idx,delta) => { const nf=[...files]; const nd=nf[idx].depth+delta; if(nd>=0&&nd<=2&&!(idx===0&&nd>0)){nf[idx].depth=nd;setFiles(nf);} };
             const toggleCollapse = id => setFiles(p=>p.map(f=>f.id===id?{...f,isCollapsed:!f.isCollapsed}:f));
+            // ── EMAIL NOTIFY ──────────────────────────────────────────────────────
+            const handleNotifyReviewer = (file) => {
+                // Determine recipient — use checkedBy if it looks like an email, otherwise blank
+                const isEmail = (s) => s && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+                const to = isEmail(file.checkedBy) ? file.checkedBy.trim()
+                         : isEmail(file.qcReviewBy) ? file.qcReviewBy.trim()
+                         : '';
+
+                const subject = encodeURIComponent(
+                    `[CalcBinder] Section ${file.sectionLabel} — ${file.sectionTitle||'Untitled'} ready for review`
+                );
+
+                const statusLabel = file.status==='review' ? 'In Review'
+                                  : file.status==='approved' ? 'Approved'
+                                  : 'Draft';
+
+                const body = encodeURIComponent(
+`Hi,
+
+This is a notification from CalcBinder.
+
+The following calculation section has been updated and is ready for your review:
+
+  Project:   ${projectMeta.title}
+  Proj No:   ${projectMeta.number}
+  Client:    ${projectMeta.client}
+  Section:   ${file.sectionLabel} — ${file.sectionTitle||'Untitled'}
+  Status:    ${statusLabel}
+  Revision:  ${file.revision||'0'}
+  Pages:     ${file.pageCount||'—'}
+
+Updated by: ${userEmail}
+
+Please log in to CalcBinder to review the section.
+
+This is an automated notification. Do not reply to this email.`
+                );
+
+                window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+            };
+            // ── END EMAIL NOTIFY ───────────────────────────────────────────────────
+
             const handleLogout = onSignOut;
 
             // Drag
@@ -929,9 +1059,15 @@
                     });
 
                     if (embCoverImage) {
-                        // ── WITH COVER IMAGE: fills remaining space below meta info ──
-                        const imgTop = metaStartY - (metaRows.length * metaLineH) - 16;
-                        const imgBot = 40;
+                        // ── WITH COVER IMAGE: image fills middle, description shown below image ──
+                        // Calculate how much space description needs
+                        const descLines = projectMeta.description
+                            ? getWrappedLines(cleanText(projectMeta.description), 9, fontOblique, width-120)
+                            : [];
+                        const descH = descLines.length > 0 ? (descLines.length * 12) + 8 : 0;
+                        // Image sits between meta rows and description+bottom band
+                        const imgTop = metaStartY - (metaRows.length * metaLineH) - 12;
+                        const imgBot = 35 + descH; // leave room for description above bottom band
                         const imgAreaH = imgTop - imgBot;
                         const scl = Math.min((width-60)/embCoverImage.width, imgAreaH/embCoverImage.height);
                         const imgW = embCoverImage.width*scl, imgH = embCoverImage.height*scl;
@@ -941,6 +1077,17 @@
                             width: imgW,
                             height: imgH
                         });
+                        // Description below image, above bottom band
+                        if (descLines.length > 0) {
+                            descLines.forEach((line, i) => {
+                                const lw = fontOblique.widthOfTextAtSize(line, 9);
+                                cover.drawText(line, {
+                                    x: (width-lw)/2,
+                                    y: 38 + ((descLines.length-1-i) * 12),
+                                    size: 9, font: fontOblique, color: rgb(0.5,0.5,0.5)
+                                });
+                            });
+                        }
                     } else {
                         // ── WITHOUT COVER IMAGE: description near bottom ──
                         if(projectMeta.description) {
@@ -952,7 +1099,7 @@
 
                     // TOC
                     const epp=25, tocPgs=Math.ceil(numberedFiles.length/epp)||1;
-                    let rpn=1+tocPgs+1;
+                    let rpn=tocPgs;
                     const analysis=numberedFiles.map(f=>{const e={...f,startPage:rpn+1};rpn+=f.isHeader?1:(1+(f.rawPages||1));return e;});
                     for(let p=0;p<tocPgs;p++){
                         const tp=pdf.addPage(SZ);
@@ -1048,17 +1195,20 @@
                     }
 
                     // Footer pass — page numbers + section footers + watermark
+                    // Page numbering starts at TOC (page index 1), cover has no number
                     const cnt=pdf.getPageCount();
                     const { degrees } = window.PDFLib;
                     for(let i=0;i<cnt;i++){
                         const p=pdf.getPage(i);
                         const { width: pgW, height: pgH } = p.getSize();
 
-                        // Page number (configured side)
-                        const txt=`${i+1}`;
-                        const tw=fontRegular.widthOfTextAtSize(txt,9);
-                        const numX=pageNumberPos==='left'?40:pageNumberPos==='center'?(pgW-tw)/2:pgW-40-tw;
-                        p.drawText(txt,{x:numX,y:18,size:9,font:fontRegular,color:rgb(0.4,0.4,0.4)});
+                        // Page number — skip cover page (i===0), number starts at 1 from TOC
+                        if (i > 0) {
+                            const txt=`${i}`; // i===1 → "1" on first TOC page
+                            const tw=fontRegular.widthOfTextAtSize(txt,9);
+                            const numX=pageNumberPos==='left'?40:pageNumberPos==='center'?(pgW-tw)/2:pgW-40-tw;
+                            p.drawText(txt,{x:numX,y:18,size:9,font:fontRegular,color:rgb(0.4,0.4,0.4)});
+                        }
 
                         // Section label + title — left footer, content pages only
                         const sec=pageSection.get(i);
@@ -1158,7 +1308,7 @@
 
             return (
                 <div className="h-full flex flex-col" onDragOver={e=>{e.preventDefault();if(e.dataTransfer.items?.length)setIsDraggingFile(true);}} onDrop={e=>{e.preventDefault();setIsDraggingFile(false);if(e.dataTransfer.files?.length)processFiles(e.dataTransfer.files);}} onDragLeave={e=>{if(!e.relatedTarget)setIsDraggingFile(false);}}>
-                    {editingFile&&<CoverSheetModal key={editingFile.id} file={editingFile} projectMeta={projectMeta} onClose={()=>setEditingFile(null)} onSave={handleUpdateFileDetails}/>}
+                    {editingFile&&<CoverSheetModal key={editingFile.id} file={editingFile} projectMeta={projectMeta} onClose={()=>setEditingFile(null)} onSave={handleUpdateFileDetails} onNotify={handleNotifyReviewer}/>}
                     {showConfigModal&&<OutputConfigModal onClose={()=>setShowConfigModal(false)} pageNumberPos={pageNumberPos} setPageNumberPos={setPageNumberPos} showPageHeader={showPageHeader} setShowPageHeader={setShowPageHeader} bookmarksEnabled={bookmarksEnabled} setBookmarksEnabled={setBookmarksEnabled} watermarkEnabled={watermarkEnabled} setWatermarkEnabled={setWatermarkEnabled} watermarkText={watermarkText} setWatermarkText={setWatermarkText} watermarkPages={watermarkPages} setWatermarkPages={setWatermarkPages} totalFiles={files.length}/>}
 
                     {/* Header */}
@@ -1362,6 +1512,17 @@
                                                 <div className="flex items-center gap-1 shrink-0">
                                                     {!file.isHeader&&<button onClick={e=>{e.stopPropagation();generateBinder('open',false,file.id);}} title="Preview divider" className="p-1 text-slate-300 hover:text-brand-blue hover:bg-brand-blue-pl rounded"><Eye className="w-3.5 h-3.5"/></button>}
                                                     <button onClick={e=>{e.stopPropagation();setEditingFile(file);}} title="Edit details" className="p-1 text-slate-300 hover:text-brand-blue hover:bg-brand-blue-pl rounded"><FileText className="w-3.5 h-3.5"/></button>
+                                                    {/* Notify reviewer button */}
+                                                    {!file.isHeader&&<button onClick={e=>{e.stopPropagation();handleNotifyReviewer(file);}} title="Notify reviewer by email" className="p-1 text-slate-300 hover:text-emerald-600 hover:bg-emerald-50 rounded"><Mail className="w-3.5 h-3.5"/></button>}
+                                                    {/* Comments button with unread badge */}
+                                                    <button onClick={e=>{e.stopPropagation();setActiveCommentSectionId(prev=>prev===file.id?null:file.id);}} title="Comments" className="relative p-1 text-slate-300 hover:text-brand-blue hover:bg-brand-blue-pl rounded">
+                                                        <MessageSquare className="w-3.5 h-3.5"/>
+                                                        {totalComments(file.id)>0&&(
+                                                            <span className={`absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-0.5 rounded-full text-[8px] font-bold flex items-center justify-center text-white ${getUnreadCount(file.id)>0?'bg-orange-500':'bg-slate-400'}`}>
+                                                                {totalComments(file.id)}
+                                                            </span>
+                                                        )}
+                                                    </button>
                                                     <button onClick={e=>{e.stopPropagation();toggleCollapse(file.id);}} className="p-1 text-slate-300 hover:text-slate-600 rounded">{file.isCollapsed?<ChevronDown className="w-3.5 h-3.5"/>:<ChevronUp className="w-3.5 h-3.5"/>}</button>
                                                     <button onClick={e=>{e.stopPropagation();removeFile(file.id);}} className="p-1 text-slate-300 hover:text-red-500 rounded"><Trash2 className="w-3.5 h-3.5"/></button>
                                                 </div>
@@ -1397,24 +1558,109 @@
                             </ul>
                         </div>
 
-                        {/* Preview */}
+                        {/* Preview / Comments Panel */}
                         <div className="col-span-4 h-full flex flex-col border-l border-slate-300">
-                            <div className="flex-none p-2 bg-slate-100 border-b border-slate-200 text-xs flex justify-between px-4 items-center text-slate-500 font-medium">
-                                <span>Preview</span>
-                                <div className="flex items-center gap-2">
-                                    {isProcessing&&<span className="flex items-center gap-1 text-brand-blue"><Loader2 className="w-3 h-3 animate-spin"/> Generating...</span>}
-                                    {pdfData&&<button onClick={()=>generateBinder('open')} className="p-1 hover:bg-slate-200 rounded hover:text-brand-blue" title="Open in new tab"><ExternalLink className="w-3 h-3"/></button>}
-                                </div>
-                            </div>
-                            <div className="flex-1 overflow-hidden relative bg-slate-300">
-                                {pdfData?<PdfCanvasPreview pdfData={pdfData}/>:(
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
-                                        <Eye className="w-12 h-12 mb-2 opacity-50"/>
-                                        <p className="text-sm">Click "Update" or add files to generate preview.</p>
-                                        <p className="text-xs mt-1 opacity-60">Or click the eye icon on any section to preview its divider page.</p>
+                            {activeCommentSectionId ? (() => {
+                                const sec = numberedFiles.find(f=>f.id===activeCommentSectionId);
+                                const msgs = comments[activeCommentSectionId] || [];
+                                return (
+                                    <>
+                                        {/* Comments header */}
+                                        <div className="flex-none p-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between px-4">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <MessageSquare className="w-4 h-4 text-brand-blue shrink-0"/>
+                                                <div className="min-w-0">
+                                                    <p className="text-xs font-semibold text-slate-700 truncate">{sec?.sectionLabel} {sec?.sectionTitle||'Section'}</p>
+                                                    <p className="text-[10px] text-slate-400">{msgs.length} comment{msgs.length!==1?'s':''}</p>
+                                                </div>
+                                            </div>
+                                            <button onClick={()=>setActiveCommentSectionId(null)} className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600 shrink-0"><X className="w-4 h-4"/></button>
+                                        </div>
+
+                                        {/* Comment feed */}
+                                        <div ref={commentFeedRef} className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50">
+                                            {msgs.length===0 ? (
+                                                <div className="flex flex-col items-center justify-center h-full text-slate-400 text-center py-12">
+                                                    <MessageSquare className="w-10 h-10 mb-2 opacity-30"/>
+                                                    <p className="text-sm">No comments yet</p>
+                                                    <p className="text-xs opacity-60 mt-1">Be the first to leave a note</p>
+                                                </div>
+                                            ) : msgs.map((msg, i) => {
+                                                const isOwn = msg.uid === user?.uid;
+                                                const initials = (msg.name||msg.email||'?').slice(0,2).toUpperCase();
+                                                const d = new Date(msg.timestamp);
+                                                const timeStr = d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+                                                return (
+                                                    <div key={i} className={`flex gap-2 ${isOwn?'flex-row-reverse':''}`}>
+                                                        {/* Avatar */}
+                                                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0" style={{backgroundColor: isOwn ? 'var(--brand-blue)' : '#94a3b8'}}>
+                                                            {initials}
+                                                        </div>
+                                                        <div className={`flex-1 min-w-0 ${isOwn?'items-end':'items-start'} flex flex-col`}>
+                                                            <div className={`flex items-center gap-2 mb-0.5 ${isOwn?'flex-row-reverse':''}`}>
+                                                                <span className="text-[10px] font-semibold text-slate-600">{msg.name||msg.email}</span>
+                                                                <span className="text-[9px] text-slate-400">{timeStr}</span>
+                                                            </div>
+                                                            <div className={`relative group max-w-[85%] px-3 py-2 rounded-2xl text-xs text-slate-800 ${isOwn?'bg-brand-blue-pl rounded-tr-sm':'bg-white border border-slate-200 rounded-tl-sm'} shadow-sm`}>
+                                                                {msg.text}
+                                                                {/* Delete button — own messages only */}
+                                                                {isOwn&&(
+                                                                    <button onClick={()=>handleDeleteComment(activeCommentSectionId,i)} className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity" title="Delete">
+                                                                        <X className="w-2.5 h-2.5"/>
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {/* Input area */}
+                                        <div className="flex-none p-3 bg-white border-t border-slate-200">
+                                            <div className="flex gap-2 items-end">
+                                                <textarea
+                                                    ref={commentInputRef}
+                                                    value={commentInput}
+                                                    onChange={e=>setCommentInput(e.target.value)}
+                                                    onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSendComment();} }}
+                                                    placeholder="Add a comment... (Enter to send)"
+                                                    rows={2}
+                                                    className="flex-1 border border-slate-300 rounded-xl px-3 py-2 text-xs resize-none outline-none focus:border-brand-blue"
+                                                />
+                                                <button
+                                                    onClick={handleSendComment}
+                                                    disabled={!commentInput.trim()||commentSending}
+                                                    className="p-2.5 rounded-xl text-white disabled:opacity-40 transition-colors shrink-0"
+                                                    style={{backgroundColor:'var(--brand-blue)'}}
+                                                >
+                                                    {commentSending?<Loader2 className="w-4 h-4 animate-spin"/>:<Send className="w-4 h-4"/>}
+                                                </button>
+                                            </div>
+                                            <p className="text-[9px] text-slate-400 mt-1">Shift+Enter for new line · Comments are internal only</p>
+                                        </div>
+                                    </>
+                                );
+                            })() : (
+                                <>
+                                    <div className="flex-none p-2 bg-slate-100 border-b border-slate-200 text-xs flex justify-between px-4 items-center text-slate-500 font-medium">
+                                        <span>Preview</span>
+                                        <div className="flex items-center gap-2">
+                                            {isProcessing&&<span className="flex items-center gap-1 text-brand-blue"><Loader2 className="w-3 h-3 animate-spin"/> Generating...</span>}
+                                            {pdfData&&<button onClick={()=>generateBinder('open')} className="p-1 hover:bg-slate-200 rounded hover:text-brand-blue" title="Open in new tab"><ExternalLink className="w-3 h-3"/></button>}
+                                        </div>
                                     </div>
-                                )}
-                            </div>
+                                    <div className="flex-1 overflow-hidden relative bg-slate-300">
+                                        {pdfData?<PdfCanvasPreview pdfData={pdfData}/>:(
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
+                                                <Eye className="w-12 h-12 mb-2 opacity-50"/>
+                                                <p className="text-sm">Click "Update" or add files to generate preview.</p>
+                                                <p className="text-xs mt-1 opacity-60">Or click the eye icon on any section to preview its divider page.</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>
