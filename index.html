@@ -448,6 +448,114 @@
                         throw new Error("Could not parse any sections from the Table of Contents.");
                     }
 
+                    // ── Parse each divider page for subtitle, fields, sign-off ─────────────
+                    // The page number shown in TOC equals the page index in the PDF
+                    // (cover=index 0 no number, TOC page 1=index 1, first divider=index tocPgs+1)
+                    for (const section of sections) {
+                        try {
+                            const divItems = await getPageText(section.pageNum);
+                            const pageH = (await pdfDoc.getPage(section.pageNum)).getViewport({scale:1}).height;
+
+                            // Sort items top to bottom
+                            const sorted = [...divItems].sort((a,b) => a.y - b.y);
+
+                            // Find the "SECTION X" label (large text near top)
+                            const sectionLabelItem = sorted.find(it => it.text.startsWith('SECTION ') && it.size >= 18);
+                            const sectionLabelY = sectionLabelItem ? sectionLabelItem.y : 0;
+
+                            // Items below the section label and above the footer (bottom ~100px)
+                            const footerY = pageH - 80; // footer is near bottom
+                            const bodyItems = sorted.filter(it => it.y > sectionLabelY + 10 && it.y < footerY);
+
+                            // Extract subtitle — first item below section label with reasonable size (not the title itself)
+                            // Title is already in section.title; subtitle is smaller text just below
+                            const titleItem = bodyItems.find(it =>
+                                it.text === section.title || section.title.startsWith(it.text)
+                            );
+                            const titleY = titleItem ? titleItem.y : sectionLabelY + 40;
+                            const subtitleItem = bodyItems.find(it =>
+                                it.y > titleY + 5 &&
+                                it.y < titleY + 40 &&
+                                it.text !== section.title &&
+                                !it.text.startsWith('REV:') &&
+                                it.size < 16
+                            );
+                            if (subtitleItem) section.subtitle = subtitleItem.text;
+
+                            // Extract labeled fields — look for ALL-CAPS labels followed by content
+                            const fieldLabels = [
+                                'OBJECTIVE / SCOPE:',
+                                'OBJECTIVE/SCOPE:',
+                                'DESIGN CODE / REFERENCES:',
+                                'DESIGN CODE/REFERENCES:',
+                                'COMPUTER PROGRAM:',
+                                'CONCLUSIONS:',
+                            ];
+                            const customFields = [];
+                            for (let i = 0; i < bodyItems.length; i++) {
+                                const item = bodyItems[i];
+                                const matchedLabel = fieldLabels.find(l =>
+                                    item.text.toUpperCase().startsWith(l.replace(':','').toUpperCase())
+                                );
+                                if (matchedLabel) {
+                                    // Collect all text below this label until next label or footer
+                                    const labelY = item.y;
+                                    const nextLabelItem = bodyItems.slice(i+1).find(it =>
+                                        fieldLabels.some(l => it.text.toUpperCase().startsWith(l.replace(':','').toUpperCase()))
+                                    );
+                                    const nextLabelY = nextLabelItem ? nextLabelItem.y : footerY;
+                                    const valueItems = bodyItems.filter(it =>
+                                        it.y > labelY + 2 && it.y < nextLabelY - 2 &&
+                                        !fieldLabels.some(l => it.text.toUpperCase().startsWith(l.replace(':','').toUpperCase()))
+                                    );
+                                    const value = valueItems.map(it => it.text).join(' ').trim();
+                                    // Clean up label
+                                    const cleanLabel = matchedLabel
+                                        .replace(':', '')
+                                        .replace(' / ', ' / ')
+                                        .trim()
+                                        .split(' ').map(w => w.charAt(0)+w.slice(1).toLowerCase()).join(' ');
+                                    customFields.push({ label: cleanLabel, value, isVisible: true });
+                                }
+                            }
+                            if (customFields.length > 0) section.customFields = customFields;
+
+                            // Extract footer sign-off — items in bottom 80px of page
+                            const footerItems = sorted.filter(it => it.y >= footerY);
+                            // Footer has 3 columns: DESIGNED BY, CHECKED BY, QC REVIEW BY
+                            // Labels are tiny, names are slightly larger, dates are small
+                            const getColItems = (label) => {
+                                const labelItem = footerItems.find(it =>
+                                    it.text.toUpperCase().replace(' ','').includes(label.replace(' ',''))
+                                );
+                                if (!labelItem) return { name:'', date:'' };
+                                // Items in the same X column (within 80px)
+                                const colItems = footerItems.filter(it =>
+                                    Math.abs(it.x - labelItem.x) < 80 && it !== labelItem
+                                ).sort((a,b) => a.y - b.y);
+                                const name = colItems[0]?.text || '';
+                                const date = colItems[1]?.text || '';
+                                return { name, date };
+                            };
+                            const designed = getColItems('DESIGNED BY');
+                            const checked  = getColItems('CHECKED BY');
+                            const qc       = getColItems('QC REVIEW BY');
+                            section.designedBy   = designed.name;
+                            section.designedDate = designed.date;
+                            section.checkedBy    = checked.name;
+                            section.checkedDate  = checked.date;
+                            section.qcReviewBy   = qc.name;
+                            section.qcReviewDate = qc.date;
+
+                            // Extract revision
+                            const revItem = sorted.find(it => it.text.startsWith('REV:'));
+                            if (revItem) section.revision = revItem.text.replace('REV:','').trim();
+
+                        } catch(e) {
+                            console.warn("Could not parse divider for section", section.label, e);
+                        }
+                    }
+
                     setParsed({
                         meta: { title: projTitle, number: projNumber, client: projClient, date: projDate, docType: projDocType },
                         sections,
@@ -538,8 +646,15 @@
                                             {parsed.sections.map((s, i) => (
                                                 <div key={i} className="px-4 py-2 flex items-center gap-3 text-sm" style={{paddingLeft: `${16 + s.depth*20}px`}}>
                                                     <span className="font-mono text-xs text-slate-400 w-8 shrink-0">{s.label}</span>
-                                                    <span className="flex-1 text-slate-700 truncate">{s.title}</span>
-                                                    <span className="text-xs text-slate-400 shrink-0">~{s.rawPages} pg{s.rawPages!==1?'s':''}</span>
+                                                    <div className="flex-1 min-w-0">
+                                                        <span className="text-slate-700 truncate block">{s.title}</span>
+                                                        {s.subtitle&&<span className="text-xs text-slate-400 truncate block">{s.subtitle}</span>}
+                                                        {(s.designedBy||s.checkedBy)&&<span className="text-[10px] text-slate-300">By: {[s.designedBy,s.checkedBy].filter(Boolean).join(' · ')}</span>}
+                                                    </div>
+                                                    <div className="flex flex-col items-end shrink-0 gap-0.5">
+                                                        <span className="text-xs text-slate-400">~{s.rawPages} pg{s.rawPages!==1?'s':''}</span>
+                                                        {s.customFields?.length>0&&<span className="text-[10px] text-green-600">{s.customFields.length} fields ✓</span>}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>
@@ -946,8 +1061,14 @@
                         storagePath: null,
                         fileObj: null,
                         sectionTitle: s.title,
-                        sectionSubtitle: '',
-                        designedBy: '', checkedBy: '', qcReviewBy: '', revision: '0',
+                        sectionSubtitle: s.subtitle || '',
+                        designedBy:   s.designedBy   || '',
+                        designedDate: s.designedDate  || '',
+                        checkedBy:    s.checkedBy     || '',
+                        checkedDate:  s.checkedDate   || '',
+                        qcReviewBy:   s.qcReviewBy    || '',
+                        qcReviewDate: s.qcReviewDate  || '',
+                        revision: s.revision || '0',
                         status: 'draft',
                         uploadDate: date,
                         pageCount: s.rawPages,
@@ -956,6 +1077,12 @@
                         depth: s.depth,
                         isPlaceholder: true,
                         isCollapsed: false,
+                        customFields: s.customFields || [
+                            { label:"Objective / Scope",        value:'', isVisible:true },
+                            { label:"Design Code / References", value:'', isVisible:true },
+                            { label:"Computer Program",         value:'', isVisible:true },
+                            { label:"Conclusions",              value:'', isVisible:true },
+                        ],
                         objective: '', program: '',
                     }));
 
