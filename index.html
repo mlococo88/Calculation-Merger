@@ -315,7 +315,7 @@
         };
 
         // --- IMPORT BINDER MODAL ---
-        const ImportBinderModal = ({ onClose, onImport }) => {
+        const ImportBinderModal = ({ onClose, onImport, importProgress }) => {
             const [step, setStep] = useState('upload'); // 'upload' | 'preview' | 'importing'
             const [error, setError] = useState('');
             const [parsed, setParsed] = useState(null); // { meta, sections }
@@ -326,6 +326,8 @@
                 setStep('upload');
                 try {
                     const arrayBuffer = await file.arrayBuffer();
+                    // Keep a raw copy so pdf-lib can extract pages later during import
+                    const binderBytesCopy = arrayBuffer.slice(0);
                     const loadTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
                     const pdfDoc = await loadTask.promise;
                     const numPages = pdfDoc.numPages;
@@ -560,6 +562,7 @@
                         meta: { title: projTitle, number: projNumber, client: projClient, date: projDate, docType: projDocType },
                         sections,
                         sourcePageCount: numPages,
+                        binderBytes: binderBytesCopy, // raw bytes for pdf-lib page extraction
                     });
                     setStep('preview');
 
@@ -600,13 +603,13 @@
                                     <div className="bg-brand-blue-pl border border-brand-blue rounded-lg p-4 text-xs text-brand-blue-dk space-y-1">
                                         <p className="font-bold">What will be imported:</p>
                                         <p>✓ Project title, number, client, date</p>
-                                        <p>✓ All section titles and numbering</p>
-                                        <p>✓ Section hierarchy (depth levels)</p>
-                                        <p>✓ Estimated page counts per section</p>
+                                        <p>✓ All section titles, numbering &amp; hierarchy</p>
+                                        <p>✓ Section content pages — extracted and re-uploaded to Storage</p>
+                                        <p>✓ Page counts per section</p>
                                         <p className="font-bold mt-2">What will need to be re-entered:</p>
-                                        <p>• Individual PDF files (as placeholders — re-upload from Storage)</p>
                                         <p>• Sign-off info (Designed By, Checked By etc.)</p>
                                         <p>• Cover image, logo</p>
+                                        <p className="font-bold mt-2 text-amber-700">⏱ Large binders may take 1–2 minutes to extract and upload.</p>
                                     </div>
                                     {error && <div className="flex items-start gap-2 text-red-600 text-xs bg-red-50 p-3 rounded-lg border border-red-100"><AlertCircle className="w-4 h-4 shrink-0 mt-0.5"/><span>{error}</span></div>}
                                     <div
@@ -665,9 +668,23 @@
                             )}
 
                             {step === 'importing' && (
-                                <div className="flex flex-col items-center justify-center py-16 gap-4 text-slate-500">
+                                <div className="flex flex-col items-center justify-center py-12 gap-5 text-slate-500">
                                     <Loader2 className="w-10 h-10 animate-spin text-brand-blue"/>
-                                    <p className="text-sm font-medium">Creating project...</p>
+                                    {importProgress ? (
+                                        <>
+                                            <div className="text-center">
+                                                <p className="text-sm font-semibold text-slate-700">Extracting &amp; uploading sections...</p>
+                                                <p className="text-xs text-slate-400 mt-1 max-w-xs truncate">{importProgress.name}</p>
+                                            </div>
+                                            <div className="w-64 bg-slate-200 rounded-full h-2">
+                                                <div className="h-2 rounded-full transition-all" style={{width:`${(importProgress.current/importProgress.total)*100}%`, backgroundColor:'var(--brand-blue)'}}/>
+                                            </div>
+                                            <p className="text-xs text-slate-400">{importProgress.current} of {importProgress.total} sections</p>
+                                        </>
+                                    ) : (
+                                        <p className="text-sm font-medium">Creating project...</p>
+                                    )}
+                                    <p className="text-[10px] text-slate-400 text-center max-w-xs">This may take a minute for large binders.<br/>Please keep this window open.</p>
                                 </div>
                             )}
                         </div>
@@ -837,6 +854,7 @@
             const [selectedFileId, setSelectedFileId] = useState(null);
             const [dragItem, setDragItem] = useState(null), [dragOverIndex, setDragOverIndex] = useState(null), [isDraggingFile, setIsDraggingFile] = useState(false);
             const [showImportModal, setShowImportModal] = useState(false);
+            const [importProgress, setImportProgress] = useState(null); // {current,total,name}
             const [activeCommentSectionId, setActiveCommentSectionId] = useState(null); // which section's comments are open
             const [comments, setComments] = useState({}); // { [sectionId]: [{uid,email,text,timestamp}] }
             const [commentInput, setCommentInput] = useState('');
@@ -1052,41 +1070,97 @@
             const handleImportBinder = async (parsed) => {
                 if (!user) return;
                 try {
+                    const { PDFDocument } = window.PDFLib;
                     const date = new Date().toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'});
-                    // Build files array from parsed sections — each becomes a placeholder
-                    const importedFiles = parsed.sections.map(s => ({
-                        id: crypto.randomUUID(),
-                        name: `${s.label} ${s.title}.pdf`,
-                        downloadURL: null,
-                        storagePath: null,
-                        fileObj: null,
-                        sectionTitle: s.title,
-                        sectionSubtitle: s.subtitle || '',
-                        designedBy:   s.designedBy   || '',
-                        designedDate: s.designedDate  || '',
-                        checkedBy:    s.checkedBy     || '',
-                        checkedDate:  s.checkedDate   || '',
-                        qcReviewBy:   s.qcReviewBy    || '',
-                        qcReviewDate: s.qcReviewDate  || '',
-                        revision: s.revision || '0',
-                        status: 'draft',
-                        uploadDate: date,
-                        pageCount: s.rawPages,
-                        rawPages: s.rawPages,
-                        size: 'N/A',
-                        depth: s.depth,
-                        isPlaceholder: true,
-                        isCollapsed: false,
-                        customFields: s.customFields || [
-                            { label:"Objective / Scope",        value:'', isVisible:true },
-                            { label:"Design Code / References", value:'', isVisible:true },
-                            { label:"Computer Program",         value:'', isVisible:true },
-                            { label:"Conclusions",              value:'', isVisible:true },
-                        ],
-                        objective: '', program: '',
-                    }));
+                    const sections = parsed.sections;
 
-                    // Format date from parsed (may be YYYY-MM-DD or other)
+                    // Load the original binder bytes (stored on parsed object during parse)
+                    const binderPdfDoc = await PDFDocument.load(parsed.binderBytes, { ignoreEncryption: true });
+
+                    const importedFiles = [];
+
+                    for (let i = 0; i < sections.length; i++) {
+                        const s = sections[i];
+                        const next = sections[i + 1];
+
+                        // Update progress
+                        setImportProgress({ current: i + 1, total: sections.length, name: s.title });
+
+                        // Content pages: divider is at s.pageNum (1-based shown number = index s.pageNum-1 in PDF)
+                        // Content starts one page after the divider, ends one page before next section divider
+                        // PDF page indices are 0-based: shown page N = index N-1
+                        const dividerIdx = s.pageNum - 1;      // 0-based index of divider page
+                        const contentStart = dividerIdx + 1;   // first content page (0-based)
+                        const contentEnd = next
+                            ? next.pageNum - 2                  // last content page before next divider
+                            : binderPdfDoc.getPageCount() - 1; // last page of doc
+
+                        let downloadURL = null;
+                        let storagePath = null;
+                        let actualPageCount = s.rawPages;
+                        let isPlaceholder = true;
+
+                        if (contentStart <= contentEnd && contentEnd < binderPdfDoc.getPageCount()) {
+                            try {
+                                // Extract content pages into a new PDF
+                                const sectionPdf = await PDFDocument.create();
+                                const pageIndices = [];
+                                for (let p = contentStart; p <= contentEnd; p++) pageIndices.push(p);
+                                const copiedPages = await sectionPdf.copyPages(binderPdfDoc, pageIndices);
+                                copiedPages.forEach(p => sectionPdf.addPage(p));
+                                actualPageCount = sectionPdf.getPageCount();
+
+                                const sectionBytes = await sectionPdf.save();
+                                const cleanTitle = s.title.replace(/[^a-zA-Z0-9 _-]/g, '').trim().slice(0, 40) || 'section';
+                                const fileName = `${s.label.replace('.','_')}_${cleanTitle}.pdf`;
+                                const path = `artifacts/${appId}/public/data/files/${crypto.randomUUID()}-${fileName}`;
+                                const fileRef = ref(storage, path);
+                                await uploadBytes(fileRef, sectionBytes);
+                                downloadURL = await getDownloadURL(fileRef);
+                                storagePath = path;
+                                isPlaceholder = false;
+                            } catch(e) {
+                                console.warn(`Could not extract pages for section ${s.label}:`, e);
+                                // Fall back to placeholder
+                            }
+                        }
+
+                        importedFiles.push({
+                            id: crypto.randomUUID(),
+                            name: `${s.label} ${s.title}.pdf`,
+                            downloadURL,
+                            storagePath,
+                            fileObj: null,
+                            sectionTitle: s.title,
+                            sectionSubtitle: s.subtitle || '',
+                            designedBy:   s.designedBy   || '',
+                            designedDate: s.designedDate  || '',
+                            checkedBy:    s.checkedBy     || '',
+                            checkedDate:  s.checkedDate   || '',
+                            qcReviewBy:   s.qcReviewBy    || '',
+                            qcReviewDate: s.qcReviewDate  || '',
+                            revision: s.revision || '0',
+                            status: 'draft',
+                            uploadDate: date,
+                            pageCount: actualPageCount,
+                            rawPages: actualPageCount,
+                            size: 'N/A',
+                            depth: s.depth,
+                            isPlaceholder,
+                            isCollapsed: false,
+                            customFields: s.customFields || [
+                                { label:"Objective / Scope",        value:'', isVisible:true },
+                                { label:"Design Code / References", value:'', isVisible:true },
+                                { label:"Computer Program",         value:'', isVisible:true },
+                                { label:"Conclusions",              value:'', isVisible:true },
+                            ],
+                            objective: '', program: '',
+                        });
+                    }
+
+                    setImportProgress(null);
+
+                    // Format date
                     let isoDate = new Date().toISOString().split('T')[0];
                     if (parsed.meta.date) {
                         const d = new Date(parsed.meta.date);
@@ -1103,16 +1177,10 @@
                             docType: parsed.meta.docType || 'CALCULATION PACKAGE',
                         },
                         files: importedFiles,
-                        logoUrl: null,
-                        coverImageUrl: null,
-                        customCoverUrl: null,
-                        logoScale: 1,
-                        pageNumberPos: 'right',
-                        showPageHeader: true,
-                        bookmarksEnabled: true,
-                        watermarkEnabled: false,
-                        watermarkText: 'DRAFT',
-                        watermarkPages: 'all',
+                        logoUrl: null, coverImageUrl: null, customCoverUrl: null,
+                        logoScale: 1, pageNumberPos: 'right', showPageHeader: true,
+                        bookmarksEnabled: true, watermarkEnabled: false,
+                        watermarkText: 'DRAFT', watermarkPages: 'all',
                         themeColor: '#377F99',
                         lastModified: new Date().toISOString(),
                         createdBy: user.uid,
@@ -1120,9 +1188,14 @@
 
                     setActiveProjectId(docRef.id);
                     setShowImportModal(false);
-                    alert(`✓ Imported ${importedFiles.length} sections.\n\nEach section is a placeholder — use the Upload button on each row to re-attach the individual PDF files from your Storage bucket.`);
+
+                    const extracted = importedFiles.filter(f => !f.isPlaceholder).length;
+                    const placeholders = importedFiles.filter(f => f.isPlaceholder).length;
+                    alert(`✓ Import complete!\n\n• ${extracted} section(s) fully extracted and uploaded\n• ${placeholders} section(s) created as placeholders\n\nYou may need to re-enter sign-off info and reorder sections.`);
+
                 } catch(e) {
                     console.error("Import failed", e);
+                    setImportProgress(null);
                     alert("Import failed: " + e.message);
                 }
             };
@@ -1816,7 +1889,7 @@ This is an automated notification. Do not reply to this email.`
 
             return (
                 <div className="h-full flex flex-col" onDragOver={e=>{e.preventDefault();if(e.dataTransfer.items?.length)setIsDraggingFile(true);}} onDrop={e=>{e.preventDefault();setIsDraggingFile(false);if(e.dataTransfer.files?.length)processFiles(e.dataTransfer.files);}} onDragLeave={e=>{if(!e.relatedTarget)setIsDraggingFile(false);}}>
-                    {showImportModal&&<ImportBinderModal onClose={()=>setShowImportModal(false)} onImport={handleImportBinder}/>}
+                    {showImportModal&&<ImportBinderModal onClose={()=>setShowImportModal(false)} onImport={handleImportBinder} importProgress={importProgress}/>}
                     {editingFile&&<CoverSheetModal key={editingFile.id} file={editingFile} projectMeta={projectMeta} onClose={()=>setEditingFile(null)} onSave={handleUpdateFileDetails} onNotify={handleNotifyReviewer}/>}
                     {showConfigModal&&<OutputConfigModal onClose={()=>setShowConfigModal(false)} pageNumberPos={pageNumberPos} setPageNumberPos={setPageNumberPos} showPageHeader={showPageHeader} setShowPageHeader={setShowPageHeader} bookmarksEnabled={bookmarksEnabled} setBookmarksEnabled={setBookmarksEnabled} watermarkEnabled={watermarkEnabled} setWatermarkEnabled={setWatermarkEnabled} watermarkText={watermarkText} setWatermarkText={setWatermarkText} watermarkPages={watermarkPages} setWatermarkPages={setWatermarkPages} totalFiles={files.length}/>}
 
