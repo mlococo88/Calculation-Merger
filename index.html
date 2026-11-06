@@ -63,10 +63,10 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useRef, useMemo, useEffect, useCallback } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
-        import { Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, Trash2, Save, FilePlus, Settings, Eye, AlertCircle, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, X, FileQuestion, RefreshCw, Check, Loader2, Lock, Key, RotateCcw, AlertTriangle, FolderPlus, Layout, LogOut, Globe, PenTool, ClipboardList, Type, Copy, GripVertical, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Search, Tag, FileDown, Clock, User, Hash, MessageSquare, Send, Trash, Mail, FileUp, BookOpen, HardDrive, Highlighter, Paperclip } from 'https://esm.sh/lucide-react@0.263.1';
+        import { Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, Trash2, Save, FilePlus, Settings, Eye, AlertCircle, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, X, FileQuestion, RefreshCw, Check, Loader2, Lock, Key, RotateCcw, AlertTriangle, FolderPlus, Layout, LogOut, Globe, PenTool, ClipboardList, Type, Copy, GripVertical, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Search, Tag, FileDown, Clock, User, Hash, MessageSquare, Send, Trash, Mail, FileUp, BookOpen, HardDrive, Highlighter, Paperclip, Maximize2, ClipboardPaste } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- BUILD MARKER (bump when shipping a new revision so a stale cached copy is obvious) ---
-        const BUILD_ID = '2026-11-06-dlg3';
+        const BUILD_ID = '2026-11-06-img4';
         console.log(`%cCalcBinder build ${BUILD_ID} — Stage 4 M1–M3: schema v4, revision chains, QC status ladder, revision history panel`, 'color:#377F99;font-weight:bold');
 
         // --- LOCAL STORAGE LAYER (IndexedDB) ---
@@ -1895,13 +1895,45 @@
             );
         };
 
+        // Turn a pasted/selected image into a stored section image. Large images are
+        // downscaled (longest side 2000px); PNG is kept unless it gets very big.
+        const imageToSectionImage = (blob) => new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob); const img = new Image();
+            img.onload = () => {
+                const MAX = 2000, sc = Math.min(1, MAX / Math.max(img.width, img.height));
+                const w = Math.max(1, Math.round(img.width * sc)), h = Math.max(1, Math.round(img.height * sc));
+                const c = document.createElement('canvas'); c.width = w; c.height = h;
+                const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.drawImage(img, 0, 0, w, h);
+                URL.revokeObjectURL(url);
+                let dataUrl = c.toDataURL('image/png');
+                if (dataUrl.length > 1500000) dataUrl = c.toDataURL('image/jpeg', 0.9);
+                resolve({ id: crypto.randomUUID(), dataUrl, width: w, height: h });
+            };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image')); };
+            img.src = url;
+        });
+
         const CoverSheetModal = ({ file, projectMeta, comments=[], onClose, onSave, onAddComment, onDeleteComment, onSetQcState, isStale }) => {
             const [data, setData] = useState({ sectionTitle: file.sectionTitle||"", sectionSubtitle: file.sectionSubtitle||"", designedBy: file.designedBy||file.calcsBy||"", designedDate: file.designedDate||"", checkedBy: file.checkedBy||"", checkedDate: file.checkedDate||"", qcReviewBy: file.qcReviewBy||"", qcReviewDate: file.qcReviewDate||"", revision: file.revision||"0", status: file.status||"draft" });
             const [customFields, setCustomFields] = useState((file.customFields||[{id:1,label:"Objective / Scope",value:file.objective||"",isVisible:true},{id:2,label:"Design Code / References",value:file.references||"",isVisible:true},{id:3,label:"Computer Program",value:file.program||"",isVisible:true},{id:4,label:"Conclusions",value:file.conclusions||"",isVisible:true}]).map(f=>({...f,isEditingLabel:false})));
             const [noteInput, setNoteInput] = useState('');
+            const [coverImages, setCoverImages] = useState(file.coverImages||[]);
+            const [expandedField, setExpandedField] = useState(null);
+            const [imgError, setImgError] = useState('');
+            const imgInputRef = useRef(null);
+            const addImageBlobs = async (blobs) => {
+                setImgError('');
+                for (const b of blobs) { try { const im = await imageToSectionImage(b); setCoverImages(p=>[...p, im]); } catch(e) { setImgError(e.message); } }
+            };
+            const handlePaste = (e) => {
+                const blobs = [...(e.clipboardData?.items||[])].filter(it=>it.kind==='file' && it.type.startsWith('image/')).map(it=>it.getAsFile()).filter(Boolean);
+                if (!blobs.length) return;
+                e.preventDefault(); addImageBlobs(blobs);
+            };
+            const moveImage = (i,d) => setCoverImages(p=>{ const n=[...p]; const j=i+d; if(j<0||j>=n.length) return p; [n[i],n[j]]=[n[j],n[i]]; return n; });
             const hc = (f,v) => setData(p=>({...p,[f]:v}));
             const hcf = (i,k,v) => { const nf=[...customFields]; nf[i][k]=v; setCustomFields(nf); };
-            const handleSave = () => { onSave(file.id,{...data,customFields:customFields.map(({isEditingLabel,...r})=>r)}); onClose(); };
+            const handleSave = () => { onSave(file.id,{...data,customFields:customFields.map(({isEditingLabel,...r})=>r),coverImages}); onClose(); };
             const submitNote = () => { const t=noteInput.trim(); if(!t) return; onAddComment(t); setNoteInput(''); };
             const row = (label,prefix) => (
                 <div>
@@ -1914,7 +1946,7 @@
             );
             return (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-7xl flex flex-col max-h-[94vh]">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-7xl flex flex-col max-h-[94vh]" onPaste={handlePaste}>
                         <div className="flex justify-between items-center gap-4 px-6 py-3 border-b border-slate-100 bg-slate-50 rounded-t-xl">
                             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 shrink-0"><ClipboardList className="w-5 h-5 text-brand-blue"/> Calculation Cover Sheet</h2>
                             <div className="flex-1 min-w-0 flex items-center gap-6 text-sm text-brand-blue-dk">
@@ -1953,7 +1985,7 @@
                                             <div className="flex items-center gap-2 mb-1 min-h-[22px]">
                                                 {field.isEditingLabel
                                                     ? <input autoFocus type="text" value={field.label} onChange={e=>hcf(i,'label',e.target.value)} onBlur={()=>hcf(i,'isEditingLabel',false)} className="text-xs font-bold uppercase bg-white border border-brand-blue rounded px-1.5 py-0.5 outline-none w-full"/>
-                                                    : <><span className={`text-xs font-bold text-slate-500 uppercase ${!field.isVisible&&'opacity-50'}`}>{field.label}</span>{field.isVisible&&<button onClick={()=>hcf(i,'isEditingLabel',true)} className="p-1 text-slate-400 hover:text-brand-blue rounded"><PenTool className="w-3 h-3"/></button>}{field.isVisible&&<span className="ml-auto text-[10px] text-slate-400">{field.value.length}/2500</span>}</>
+                                                    : <><span className={`text-xs font-bold text-slate-500 uppercase ${!field.isVisible&&'opacity-50'}`}>{field.label}</span>{field.isVisible&&<button onClick={()=>hcf(i,'isEditingLabel',true)} className="p-1 text-slate-400 hover:text-brand-blue rounded"><PenTool className="w-3 h-3"/></button>}{field.isVisible&&<span className="ml-auto text-[10px] text-slate-400">{field.value.length}/2500</span>}{field.isVisible&&<button onClick={()=>setExpandedField(i)} title="Open a larger editor" className="p-1 text-slate-400 hover:text-brand-blue rounded"><Maximize2 className="w-3.5 h-3.5"/></button>}</>
                                                 }
                                             </div>
                                             <textarea rows={2} value={field.value} onChange={e=>hcf(i,'value',e.target.value)} disabled={!field.isVisible} className={`w-full border rounded p-2 text-sm outline-none resize-none ${!field.isVisible?'bg-slate-100 text-slate-400 border-slate-200':'bg-white border-slate-300 focus:ring-2 focus:ring-brand-blue'}`} placeholder="Enter details..."/>
@@ -1961,11 +1993,38 @@
                                     </div>
                                 ))}
                             </div>
+                            <div className="space-y-5">
+                            <div className="space-y-2">
+                                <h3 className="text-sm font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100 pb-1 flex items-center gap-2"><ImageIcon className="w-4 h-4"/> Cover Page Images {coverImages.length>0&&<span className="text-[10px] bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">{coverImages.length}</span>}</h3>
+                                <div tabIndex={0} onClick={e=>e.currentTarget.focus()} className="border-2 border-dashed border-slate-300 rounded-lg px-3 py-2.5 text-xs text-slate-500 flex items-center gap-2 outline-none focus:border-brand-blue focus:bg-brand-blue-pl cursor-text">
+                                    <ClipboardPaste className="w-4 h-4 shrink-0 text-slate-400"/>
+                                    <span className="flex-1">Paste a screenshot here with <b>Ctrl+V</b>. It is placed below the text on this section's cover page.</span>
+                                    <button onClick={e=>{e.stopPropagation();imgInputRef.current?.click();}} className="shrink-0 px-2 py-1 text-xs font-medium text-brand-blue bg-white border border-slate-200 hover:border-brand-blue rounded">Browse…</button>
+                                    <input ref={imgInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" multiple className="hidden" onChange={e=>{addImageBlobs([...e.target.files]); e.target.value='';}}/>
+                                </div>
+                                {imgError && <div className="text-[11px] text-red-600">{imgError}</div>}
+                                {coverImages.length>0 && (
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {coverImages.map((im,i)=>(
+                                            <div key={im.id} className="relative group border border-slate-200 rounded bg-slate-50 h-20 flex items-center justify-center overflow-hidden">
+                                                <img src={im.dataUrl} className="max-h-full max-w-full object-contain"/>
+                                                <div className="absolute inset-x-0 bottom-0 flex justify-between bg-white/90 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <div className="flex">
+                                                        <button onClick={()=>moveImage(i,-1)} disabled={i===0} title="Move up (earlier on the page)" className="p-1 text-slate-500 hover:text-brand-blue disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5"/></button>
+                                                        <button onClick={()=>moveImage(i,1)} disabled={i===coverImages.length-1} title="Move down (later on the page)" className="p-1 text-slate-500 hover:text-brand-blue disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5"/></button>
+                                                    </div>
+                                                    <button onClick={()=>setCoverImages(p=>p.filter(x=>x.id!==im.id))} title="Remove image" className="p-1 text-slate-500 hover:text-red-600"><Trash2 className="w-3.5 h-3.5"/></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                             {/* Section notes */}
                             <div className="space-y-2">
                                 <h3 className="text-sm font-bold uppercase text-slate-400 tracking-wider border-b border-slate-100 pb-1 flex items-center gap-2"><MessageSquare className="w-4 h-4"/> Notes &amp; QC Items {comments.length>0&&<span className="text-[10px] bg-slate-100 text-slate-500 rounded-full px-2 py-0.5">{comments.length}</span>}{comments.filter(c=>c.kind==='qc'&&c.status!=='closed').length>0&&<span className="text-[10px] bg-orange-100 text-orange-700 rounded-full px-2 py-0.5">{comments.filter(c=>c.kind==='qc'&&c.status!=='closed').length} open</span>}</h3>
                                 {comments.length>0 && (
-                                    <div className="space-y-1.5 max-h-56 lg:max-h-[45vh] overflow-y-auto pr-1">
+                                    <div className="space-y-1.5 max-h-56 lg:max-h-[30vh] overflow-y-auto pr-1">
                                         {comments.map(c=>(
                                             <QcItemCard key={c.id} item={c} stale={isStale?isStale(c):false}
                                                 onDelete={onDeleteComment} onSetState={onSetQcState}/>
@@ -1973,6 +2032,7 @@
                                     </div>
                                 )}
                                 <QcComposer onSubmit={(t,opts)=>onAddComment(t,opts)}/>
+                            </div>
                             </div>
                         </div>
                         <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end items-center gap-2">
@@ -1985,6 +2045,21 @@
                             <button onClick={handleSave} className="px-4 py-2 bg-brand-blue text-white font-medium hover:bg-brand-blue-dk rounded flex items-center gap-2"><Check className="w-4 h-4"/> Save Details</button>
                         </div>
                     </div>
+                    {expandedField!==null && customFields[expandedField] && (
+                        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-6" onClick={()=>setExpandedField(null)}>
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl flex flex-col h-[85vh]" onClick={e=>e.stopPropagation()}>
+                                <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100 bg-slate-50 rounded-t-xl">
+                                    <h3 className="text-sm font-bold uppercase text-slate-600 tracking-wider">{customFields[expandedField].label}</h3>
+                                    <span className="ml-auto text-xs text-slate-400">{customFields[expandedField].value.length}/2500</span>
+                                    <button onClick={()=>setExpandedField(null)} className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400"><X className="w-4 h-4"/></button>
+                                </div>
+                                <textarea autoFocus value={customFields[expandedField].value} onChange={e=>hcf(expandedField,'value',e.target.value)} onKeyDown={e=>{if(e.key==='Escape'){e.stopPropagation();setExpandedField(null);}}} className="flex-1 m-4 border border-slate-300 rounded p-3 text-sm leading-relaxed outline-none resize-none focus:ring-2 focus:ring-brand-blue" placeholder="Enter details..."/>
+                                <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end">
+                                    <button onClick={()=>setExpandedField(null)} className="px-4 py-2 bg-brand-blue text-white font-medium hover:bg-brand-blue-dk rounded flex items-center gap-2"><Check className="w-4 h-4"/> Done</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -4613,7 +4688,15 @@
             const getWrappedLines = (text,size,font,maxW)=>{ if(!text) return []; const ws=String(text).split(' '); let lines=[],cur=ws[0]; for(let i=1;i<ws.length;i++){if(font.widthOfTextAtSize(`${cur} ${ws[i]}`,size)<maxW)cur+=` ${ws[i]}`;else{lines.push(cur);cur=ws[i];}} lines.push(cur); return lines; };
             const drawWrappedText = (page,text,y,size,font,rgb,color=[0,0,0],maxW,align='center')=>{ if(!text) return; const {width}=page.getSize(); const sw=maxW||(width-100); const lines=getWrappedLines(cleanText(text),size,font,sw); const lh=size*1.3; const ci=(lines.length-1)/2; lines.forEach((l,i)=>{ const tw=font.widthOfTextAtSize(l,size); const x=align==='left'?50:align==='right'?width-50-tw:(width-tw)/2; page.drawText(l,{x,y:y+(ci-i)*lh,size,font,color:rgb(...color)}); }); };
 
-            const drawFormalDivider = (page,fileData,projMeta,embLogo,fonts,rgb,theme)=>{
+            const embedSectionImages = async (pdf,f) => {
+                const out=[];
+                for (const im of (f.coverImages||[])) {
+                    try { const bytes=await (await fetch(im.dataUrl)).arrayBuffer(); out.push(im.dataUrl.startsWith('data:image/png')?await pdf.embedPng(bytes):await pdf.embedJpg(bytes)); }
+                    catch(e){ console.warn('Section image embed failed',e); }
+                }
+                return out;
+            };
+            const drawFormalDivider = (page,fileData,projMeta,embLogo,fonts,rgb,theme,embImages=[])=>{
                 try {
                     const {width,height}=page.getSize(); const {fontBold,fontRegular}=fonts;
                     const margin=40,cw=width-(margin*2);
@@ -4646,6 +4729,21 @@
                     let curY=tY-90;
                     const drawBlock=(label,text)=>{ if(!text||curY<(margin+65+40)) return; page.drawText(label,{x:margin,y:curY,size:8,font:fontBold,color:rgb(0.4,0.4,0.4)}); const ls=getWrappedLines(cleanText(text),10,fontRegular,cw-10); ls.forEach((l,i)=>{const ly=curY-14-(i*13);if(ly>(margin+75))page.drawText(l,{x:margin,y:ly,size:10,font:fontRegular,color:rgb(0,0,0)});}); curY-=(ls.length*13)+28; };
                     (fileData.customFields||[{label:"OBJECTIVE/SCOPE",value:fileData.objective,isVisible:!!fileData.objective},{label:"COMPUTER PROGRAM",value:fileData.program,isVisible:!!fileData.program}]).forEach(f=>{if(f.isVisible&&f.value&&f.label)drawBlock(f.label.toUpperCase()+":",f.value);});
+                    // Pasted images — stacked below the text, scaled to fit the space above the sign-off block
+                    if (embImages && embImages.length){
+                        const gap=10, top=curY+8, bottom=fileData.isHeader?margin:margin+65+14;
+                        const slotH=(top-bottom-gap*(embImages.length-1))/embImages.length;
+                        if (slotH>=40){
+                            let y=top;
+                            embImages.forEach(img=>{
+                                const sc=Math.min(cw/img.width, slotH/img.height, 1);
+                                const w=img.width*sc, h=img.height*sc, x=margin+(cw-w)/2;
+                                page.drawImage(img,{x,y:y-h,width:w,height:h});
+                                page.drawRectangle({x,y:y-h,width:w,height:h,borderColor:rgb(0.8,0.8,0.8),borderWidth:0.5});
+                                y-=h+gap;
+                            });
+                        }
+                    }
                     // Footer sign-off
                     if (!fileData.isHeader){
                         const bb=margin,bh=65,bt=bb+bh;
@@ -5045,7 +5143,7 @@
                     if (singleFileId) {
                         const f=numberedFiles.find(f=>f.id===singleFileId);
                         if (!f){setIsProcessing(false);return;}
-                        const dp=pdf.addPage(SZ); drawFormalDivider(dp,f,projectMeta,embLogo,fonts,rgb,{dark:themeDark,pale:themePale,accent:themeAccent,text:themeText});
+                        const dp=pdf.addPage(SZ); drawFormalDivider(dp,f,projectMeta,embLogo,fonts,rgb,{dark:themeDark,pale:themePale,accent:themeAccent,text:themeText},await embedSectionImages(pdf,f));
                         const bytes=await pdf.save();
                         const blob=new Blob([bytes],{type:'application/pdf'});
                         window.open(URL.createObjectURL(blob),'_blank');
@@ -5223,7 +5321,7 @@
                             depth: f.depth,
                         });
                         const dp=pdf.addPage(SZ);
-                        drawFormalDivider(dp,f,projectMeta,embLogo,fonts,rgb,{dark:themeDark,pale:themePale,accent:themeAccent,text:themeText});
+                        drawFormalDivider(dp,f,projectMeta,embLogo,fonts,rgb,{dark:themeDark,pale:themePale,accent:themeAccent,text:themeText},await embedSectionImages(pdf,f));
 
                         if(!f.isHeader){
                             if(f.isPlaceholder){
