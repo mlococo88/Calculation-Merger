@@ -66,7 +66,7 @@
         import { Upload, FileText, ArrowUp, ArrowDown, ArrowRight, ArrowLeft, Trash2, Save, FilePlus, Settings, Eye, AlertCircle, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, X, FileQuestion, RefreshCw, Check, Loader2, Lock, Key, RotateCcw, AlertTriangle, FolderPlus, Layout, LogOut, Globe, PenTool, ClipboardList, Type, Copy, GripVertical, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Search, Tag, FileDown, Clock, User, Hash, MessageSquare, Send, Trash, Mail, FileUp, BookOpen, HardDrive, Highlighter, Paperclip, Maximize2, ClipboardPaste } from 'https://esm.sh/lucide-react@0.263.1';
 
         // --- BUILD MARKER (bump when shipping a new revision so a stale cached copy is obvious) ---
-        const BUILD_ID = '2026-11-06-img4';
+        const BUILD_ID = '2026-11-16-para5';
         console.log(`%cCalcBinder build ${BUILD_ID} — Stage 4 M1–M3: schema v4, revision chains, QC status ladder, revision history panel`, 'color:#377F99;font-weight:bold');
 
         // --- LOCAL STORAGE LAYER (IndexedDB) ---
@@ -4727,7 +4727,7 @@
                     page.drawLine({start:{x:margin,y:tY-65},end:{x:width-margin,y:tY-65},thickness:0.5,color:rgb(0.8,0.8,0.8)});
                     // Body fields
                     let curY=tY-90;
-                    const drawBlock=(label,text)=>{ if(!text||curY<(margin+65+40)) return; page.drawText(label,{x:margin,y:curY,size:8,font:fontBold,color:rgb(0.4,0.4,0.4)}); const ls=getWrappedLines(cleanText(text),10,fontRegular,cw-10); ls.forEach((l,i)=>{const ly=curY-14-(i*13);if(ly>(margin+75))page.drawText(l,{x:margin,y:ly,size:10,font:fontRegular,color:rgb(0,0,0)});}); curY-=(ls.length*13)+28; };
+                    const drawBlock=(label,text)=>{ if(!text||curY<(margin+65+40)) return; page.drawText(label,{x:margin,y:curY,size:8,font:fontBold,color:rgb(0.4,0.4,0.4)}); const ls=String(text).replace(/\r\n?/g,'\n').replace(/^\s*\n|\n\s*$/g,'').split('\n').flatMap(para=>para.trim()?getWrappedLines(cleanText(para),10,fontRegular,cw-10):['']); ls.forEach((l,i)=>{const ly=curY-14-(i*13);if(ly>(margin+75))page.drawText(l,{x:margin,y:ly,size:10,font:fontRegular,color:rgb(0,0,0)});}); curY-=(ls.length*13)+28; };
                     (fileData.customFields||[{label:"OBJECTIVE/SCOPE",value:fileData.objective,isVisible:!!fileData.objective},{label:"COMPUTER PROGRAM",value:fileData.program,isVisible:!!fileData.program}]).forEach(f=>{if(f.isVisible&&f.value&&f.label)drawBlock(f.label.toUpperCase()+":",f.value);});
                     // Pasted images — stacked below the text, scaled to fit the space above the sign-off block
                     if (embImages && embImages.length){
